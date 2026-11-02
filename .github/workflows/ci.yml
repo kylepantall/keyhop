@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test tests
+      - name: Build Touch ID helper
+        if: runner.os == 'macOS'
+        run: bun run build:helper
+      - name: Parse PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          foreach ($f in 'scripts/install.ps1', 'native/windows/keyhop-auth.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors; exit 1 }
+          }
+      - name: Install from this checkout
+        if: runner.os == 'macOS'
+        run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version

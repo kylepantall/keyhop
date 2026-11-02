@@ -1,0 +1,35 @@
+{
+  "name": "keyhop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server that lets Claude use secrets from 1Password and your own sync scripts without seeing them, unlocked with Touch ID or Windows Hello.",
+  "type": "module",
+  "bin": {
+    "keyhop": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts serve",
+    "test": "bun test tests",
+    "typecheck": "tsc --noEmit",
+    "build:helper": "bun scripts/build-helper.mjs"
+  },
+  "author": "Kyle Pantall",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kylepantall/keyhop.git"
+  },
+  "engines": {
+    "bun": ">=1.4.3"
+  },
+  "packageManager": "bun@1.4.3",
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}
