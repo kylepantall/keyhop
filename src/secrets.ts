@@ -2,7 +2,7 @@ import { assertName, loadConfig } from './config.ts';
 import { assertAllowable, pinExecutable, resolveExecutable } from './policy.ts';
 import type { VaultStore } from './store.ts';
 import { collectSecrets, planSteps } from './sync.ts';
-import type { AllowedExecutable, SyncResult, VaultData } from './types.ts';
+import type { AllowedExecutable, Progress, SyncResult, VaultData } from './types.ts';
 
 export function syncedSecrets(vault: VaultData): Record<string, string> {
   return Object.fromEntries(Object.entries(vault.secrets).map(([name, entry]) => [name, entry.value]));
@@ -13,11 +13,12 @@ export function syncedSecrets(vault: VaultData): Record<string, string> {
  * Access rules survive a name disappearing, but are cleared when a name comes
  * back from a different origin (another ref, or an edited script).
  */
-export async function syncVault(store: VaultStore): Promise<SyncResult> {
+export async function syncVault(store: VaultStore, onProgress?: Progress): Promise<SyncResult> {
   const config = await loadConfig(store.paths);
   const timeoutMs = Math.min(Math.max(Number(config.stepTimeoutSeconds) || 120, 1), 3600) * 1000;
-  const collected = await collectSecrets(await planSteps(config, store.paths.syncDir, timeoutMs));
+  const collected = await collectSecrets(await planSteps(config, store.paths.syncDir, timeoutMs, onProgress), onProgress);
   const now = new Date().toISOString();
+  onProgress?.(`Saving ${Object.keys(collected.values).length} secret(s) to the vault`);
   return store.update('unlock', (vault) => {
     const removed = Object.keys(vault.secrets).filter((name) => !collected.values[name]);
     const rulesCleared: string[] = [];

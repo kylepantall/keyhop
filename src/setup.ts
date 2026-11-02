@@ -322,7 +322,7 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
 
   spinner.start('Syncing (your password tools may ask you to approve)');
   try {
-    const result = await syncVault(store);
+    const result = await syncVault(store, (message) => spinner.message(message));
     spinner.stop(`Synced ${result.total} secret(s): ${result.steps.map((s) => `${s.step} (${s.count})`).join(', ') || 'no steps yet'}`);
   } catch (error) {
     spinner.error('Sync failed');

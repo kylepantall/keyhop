@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- `keyhop sync` and setup show a spinner with each step and a progress bar per 1Password vault.
+
 ## 0.2.1
 
 - Fix: whole-vault sync failed with `"-" isn't an item`; items are now fetched one by one (six at a time).

@@ -98,7 +98,13 @@ esac
     );
     await chmod(join(bin, 'op'), 0o755);
     process.env.PATH = `${bin}:${originalPath}`;
-    const out = await readVaults({ onePassword: { vaults: [{ id: 'v1' }] } }, 2000, new Set(['LINKED_KEY']));
+    const progress: string[] = [];
+    const out = await readVaults({ onePassword: { vaults: [{ id: 'v1' }] } }, 2000, new Set(['LINKED_KEY']), (m) =>
+      progress.push(m)
+    );
+    // One update for the listing, then one per item.
+    expect(progress).toHaveLength(9);
+    expect(progress.some((m) => /sk_1|vi\d/.test(m))).toBe(false);
     expect(out.STRIPE_KEY).toEqual({ value: 'sk_1', origin: 'op://v1/i1/k' });
     expect(out.ITEM_I8_KEY?.value).toBe('vi8');
     expect(Object.keys(out)).toHaveLength(8);

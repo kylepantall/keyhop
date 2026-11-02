@@ -98,6 +98,9 @@ export interface StepResult {
   count: number;
 }
 
+/** Sync progress for a spinner; messages never contain secret values. */
+export type Progress = (message: string) => void;
+
 export interface SyncResult {
   steps: StepResult[];
   total: number;

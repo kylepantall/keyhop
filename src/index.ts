@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import * as ui from '@clack/prompts';
 import { platformAuthenticator } from './auth.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { runDoctor } from './doctor.ts';
@@ -67,7 +68,17 @@ async function main(argv: string[]): Promise<number> {
     case 'update':
       return runUpdateCommand(args);
     case 'sync': {
-      const result = await syncVault(store());
+      // A spinner only on a terminal; piped output stays plain.
+      const spinner = process.stdout.isTTY ? ui.spinner() : null;
+      spinner?.start('Syncing (your password tools may ask you to approve)');
+      let result;
+      try {
+        result = await syncVault(store(), spinner ? (message) => spinner.message(message) : undefined);
+      } catch (error) {
+        spinner?.error('Sync failed');
+        throw error;
+      }
+      spinner?.stop('Synced');
       for (const step of result.steps) console.log(`  ${step.step}: ${step.count}`);
       console.log(`Synced ${result.total} secret(s).${result.removed.length ? ` Removed: ${result.removed.join(', ')}` : ''}`);
       if (result.rulesCleared.length)

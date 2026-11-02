@@ -7,7 +7,7 @@
 import { assertName } from './config.ts';
 import { locate, PROVIDERS } from './providers.ts';
 import { runProcess } from './process.ts';
-import type { Config, OnePasswordVault } from './types.ts';
+import type { Config, OnePasswordVault, Progress } from './types.ts';
 
 export interface OpField {
   id: string;
@@ -132,11 +132,17 @@ export async function opJson(op: string, args: string[], config: Config, timeout
   return result.stdout;
 }
 
+function bar(done: number, total: number, width = 20): string {
+  const filled = Math.round((done / total) * width);
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`;
+}
+
 /** Reads every item (with values) from each linked vault. */
 export async function readVaults(
   config: Config,
   timeoutMs: number,
-  taken: Set<string>
+  taken: Set<string>,
+  onProgress?: Progress
 ): Promise<Record<string, { value: string; origin: string }>> {
   const vaults = config.onePassword?.vaults ?? [];
   if (!vaults.length) return {};
@@ -147,14 +153,20 @@ export async function readVaults(
   for (const vault of vaults) {
     const label = vault.name ?? vault.id;
     try {
+      onProgress?.(`1Password ${label}: listing items`);
       const list = JSON.parse(await opJson(op, ['item', 'list', '--vault', vault.id], config, timeoutMs)) as { id: string }[];
-      const get = async (id: string) =>
-        parseJsonObjects(await opJson(op, ['item', 'get', id, '--vault', vault.id, '--reveal'], config, timeoutMs)) as OpItem[];
+      const items: OpItem[] = [];
+      const get = async (id: string) => {
+        items.push(
+          ...(parseJsonObjects(await opJson(op, ['item', 'get', id, '--vault', vault.id, '--reveal'], config, timeoutMs)) as OpItem[])
+        );
+        onProgress?.(`1Password ${label}: ${bar(items.length, list.length)} ${items.length}/${list.length} items`);
+      };
       // op won't read item ids from a Bun stdin pipe, so fetch each item. The
       // first call alone, so 1Password shows one approval; then a few at a time.
-      const items: OpItem[] = list.length ? await get(list[0]!.id) : [];
+      if (list.length) await get(list[0]!.id);
       for (let i = 1; i < list.length; i += GET_CONCURRENCY)
-        items.push(...(await Promise.all(list.slice(i, i + GET_CONCURRENCY).map((item) => get(item.id)))).flat());
+        await Promise.all(list.slice(i, i + GET_CONCURRENCY).map((item) => get(item.id)));
       Object.assign(out, itemsToSecrets(items, vault.id, vault.fields, taken));
     } catch (error) {
       throw new Error(`1Password vault ${label}: ${(error as Error).message} ${provider.signInHint}`);

@@ -15,7 +15,7 @@ import { readSecret, providerFor } from './providers.ts';
 import { hashFile } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
-import type { Config, StepResult } from './types.ts';
+import type { Config, Progress, StepResult } from './types.ts';
 
 export interface Produced {
   value: string;
@@ -123,7 +123,8 @@ export function parseStepOutput(stdout: string, step: string): Record<string, st
 export async function planSteps(
   config: Config,
   syncDir: string,
-  stepTimeoutMs: number
+  stepTimeoutMs: number,
+  onProgress?: Progress
 ): Promise<SyncStep[]> {
   const byTool = new Map<string, [string, string][]>();
   for (const [name, source] of Object.entries(config.secrets ?? {})) {
@@ -138,7 +139,9 @@ export async function planSteps(
     async run() {
       // Whole vaults first; a secret linked by name overrides the same name from a vault.
       const values: Record<string, Produced> =
-        id === '1password' ? await readVaults(config, stepTimeoutMs, new Set(entries.map(([name]) => name))) : {};
+        id === '1password'
+          ? await readVaults(config, stepTimeoutMs, new Set(entries.map(([name]) => name)), onProgress)
+          : {};
       // One at a time: tools such as op show a single unlock prompt this way.
       for (const [name, ref] of entries) {
         try {
@@ -190,11 +193,12 @@ function safeParse(stdout: string, step: string): Record<string, string> {
 }
 
 /** Runs every step; any failure aborts the whole sync so the vault stays as it was. */
-export async function collectSecrets(steps: SyncStep[]): Promise<CollectedSecrets> {
+export async function collectSecrets(steps: SyncStep[], onProgress?: Progress): Promise<CollectedSecrets> {
   const values: CollectedSecrets['values'] = {};
   const results: StepResult[] = [];
-  for (const step of steps) {
+  for (const [index, step] of steps.entries()) {
     let produced: Record<string, Produced>;
+    onProgress?.(`[${index + 1}/${steps.length}] ${step.name}`);
     try {
       produced = await step.run();
     } catch (error) {
