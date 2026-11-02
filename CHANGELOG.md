@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Sync whole 1Password vaults: every item becomes `ITEM_FIELD` secrets, and new items arrive on each sync. `keyhop setup` offers it first.
+- Fix: the installer's setup wizard crashed under `curl | bash` (`EINVAL … kqueue`).
 
 ## 0.1.0
 
