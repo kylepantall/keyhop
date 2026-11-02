@@ -6,9 +6,22 @@ export interface Config {
   unlockMinutes?: number;
   /** Seconds each sync step may run. */
   stepTimeoutSeconds?: number;
-  onePassword?: { account?: string };
+  onePassword?: {
+    account?: string;
+    /** Whole vaults: every item becomes ITEM_FIELD secrets in the `00-1password` step. */
+    vaults?: OnePasswordVault[];
+  };
   /** Secrets pulled from linked password tools; each tool is a `00-<tool>` sync step. */
   secrets?: Record<string, SecretSource>;
+}
+
+export interface OnePasswordVault {
+  /** Vault id (names can be renamed). */
+  id: string;
+  /** Vault name when linked, for messages. */
+  name?: string;
+  /** `concealed` (default): passwords, API keys and other hidden fields. `all`: every field with a value. */
+  fields?: 'concealed' | 'all';
 }
 
 export interface SecretSource {

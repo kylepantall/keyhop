@@ -60,20 +60,23 @@ export async function runChecks(p: Paths): Promise<Check[]> {
       add('config', 'fail', (error as Error).message, `Fix ${p.config}`);
     }
   }
+  const vaults = config.onePassword?.vaults?.length ?? 0;
   for (const provider of availableProviders()) {
     const count = linked.get(provider.id) ?? 0;
+    const vaultCount = provider.id === '1password' ? vaults : 0;
+    const what = [vaultCount && `${vaultCount} whole vault(s)`, count && `${count} secret(s)`].filter(Boolean).join(' + ');
     const binary = locate(provider);
     const area = `tool: ${provider.label}`;
     if (!binary) {
-      if (count) add(area, 'fail', `${count} secret(s) linked but ${provider.binary} is not installed`, provider.install);
+      if (what) add(area, 'fail', `${what} linked but ${provider.binary} is not installed`, provider.install);
       continue;
     }
-    if (!count) {
+    if (!what) {
       add(area, 'info', `installed, not linked`, 'keyhop setup');
       continue;
     }
-    if (await isSignedIn(provider)) add(area, 'ok', `${count} secret(s), signed in`);
-    else add(area, 'warn', `${count} secret(s), not signed in or locked`, provider.signInHint);
+    if (await isSignedIn(provider)) add(area, 'ok', `${what}, signed in`);
+    else add(area, 'warn', `${what}, not signed in or locked`, provider.signInHint);
   }
 
   const scripts = await listScripts(p.syncDir);

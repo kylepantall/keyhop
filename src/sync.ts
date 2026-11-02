@@ -10,6 +10,7 @@
 import { readdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { assertName } from './config.ts';
+import { readVaults } from './onepassword.ts';
 import { readSecret, providerFor } from './providers.ts';
 import { hashFile } from './policy.ts';
 import { runProcess } from './process.ts';
@@ -130,11 +131,14 @@ export async function planSteps(
     const id = providerFor(source.ref).id;
     byTool.set(id, [...(byTool.get(id) ?? []), [name, source.ref]]);
   }
+  if (config.onePassword?.vaults?.length && !byTool.has('1password')) byTool.set('1password', []);
   const steps: SyncStep[] = [...byTool].map(([id, entries]) => ({
     name: `00-${id}`,
     kind: 'tool',
     async run() {
-      const values: Record<string, Produced> = {};
+      // Whole vaults first; a secret linked by name overrides the same name from a vault.
+      const values: Record<string, Produced> =
+        id === '1password' ? await readVaults(config, stepTimeoutMs, new Set(entries.map(([name]) => name))) : {};
       // One at a time: tools such as op show a single unlock prompt this way.
       for (const [name, ref] of entries) {
         try {

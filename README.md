@@ -54,6 +54,18 @@ On a first install the installer starts `keyhop setup`, which:
 | pass | `pass://path/to/entry` | gpg-agent can decrypt |
 | macOS Keychain | `keychain://service` | login keychain unlocked |
 
+### Whole 1Password vaults
+
+`keyhop setup` → 1Password → **Whole vaults** syncs every item in the vaults you pick, and new items arrive on the next `keyhop sync`.
+
+| | |
+|---|---|
+| Names | `ITEM_FIELD`, e.g. `STRIPE_SECRET_KEY`; clashes get `_2`, `_3` |
+| Fields | hidden fields (passwords, API keys) by default, or every field with a value; never one-time codes |
+| Linked by name | a secret you linked one by one keeps its name and wins over a vault field |
+| Access rules | bound to the field's 1Password id, so renaming an item renames the secret, which starts with no allowed commands |
+| Config | `onePassword.vaults` in `config.json`: `[{ "id": "…", "fields": "concealed" }]` |
+
 ## Your own sync scripts
 
 Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyhop\sync.d`). Each prints `NAME=value` lines or one JSON object.

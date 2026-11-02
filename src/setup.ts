@@ -8,9 +8,9 @@ import { isSupportedPlatform } from './auth.ts';
 import { claudeRegistration, registerWithClaude } from './claude.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { formatChecks, runChecks } from './doctor.ts';
+import { opJson, toSecretName } from './onepassword.ts';
 import { appRoot } from './paths.ts';
 import { availableProviders, isSignedIn, locate, providerFor, type Provider } from './providers.ts';
-import { runProcess } from './process.ts';
 import { changeAllowed, resolveAllowed, syncVault } from './secrets.ts';
 import type { VaultStore } from './store.ts';
 import type { Config } from './types.ts';
@@ -27,15 +27,6 @@ function bail<T>(value: T): Exclude<T, symbol> {
     process.exit(1);
   }
   return value as Exclude<T, symbol>;
-}
-
-export function toSecretName(...parts: string[]): string {
-  return parts
-    .join('_')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .replace(/^(\d)/, '_$1');
 }
 
 function validateName(taken: Set<string>) {
@@ -62,20 +53,54 @@ function splitList(value: string | undefined): string[] {
   return (value ?? '').split(/[\s,]+/).filter(Boolean);
 }
 
-async function opJson<T>(op: string, args: string[]): Promise<T> {
-  const result = await runProcess(op, [...args, '--format', 'json'], { timeoutMs: 60_000 });
-  if (result.code !== 0) throw new Error(result.stderr.trim() || `op ${args.join(' ')} failed`);
-  return JSON.parse(result.stdout) as T;
+async function listJson<T>(op: string, args: string[], config: Config): Promise<T> {
+  return JSON.parse(await opJson(op, args, config, 60_000)) as T;
+}
+
+/** Links whole vaults, so every item (and every new one) syncs without picking. */
+async function linkVaults(op: string, config: Config): Promise<void> {
+  const vaults = await listJson<{ id: string; name: string }[]>(op, ['vault', 'list'], config);
+  if (!vaults.length) {
+    ui.log.warn('No 1Password vaults found.');
+    return;
+  }
+  const previous = new Map((config.onePassword?.vaults ?? []).map((v) => [v.id, v]));
+  const chosen = bail(
+    await ui.multiselect({
+      message: '1Password vaults to sync in full',
+      options: vaults.map((v) => ({ value: v.id, label: v.name, hint: previous.has(v.id) ? 'linked' : undefined })),
+      initialValues: vaults.filter((v) => previous.has(v.id)).map((v) => v.id),
+      required: false,
+    })
+  );
+  if (!chosen.length) {
+    config.onePassword = { ...config.onePassword, vaults: [] };
+    return;
+  }
+  const fields = bail(
+    await ui.select({
+      message: 'Which fields become secrets?',
+      options: [
+        { value: 'concealed' as const, label: 'Hidden fields only', hint: 'passwords, API keys, credentials; recommended' },
+        { value: 'all' as const, label: 'Every field with a value', hint: 'adds usernames, URLs and notes' },
+      ],
+    })
+  );
+  config.onePassword = {
+    ...config.onePassword,
+    vaults: chosen.map((id) => ({ id, name: vaults.find((v) => v.id === id)!.name, fields })),
+  };
+  ui.log.success('Every item syncs as ITEM_FIELD, e.g. GITHUB_CREDENTIAL. See the names with: keyhop list');
 }
 
 /** Vault → item → field picker, so nobody has to type an op:// reference. */
-async function pickFromOnePassword(op: string): Promise<{ ref: string; suggested: string } | null> {
-  const vaults = await opJson<{ id: string; name: string }[]>(op, ['vault', 'list']);
+async function pickFromOnePassword(op: string, config: Config): Promise<{ ref: string; suggested: string } | null> {
+  const vaults = await listJson<{ id: string; name: string }[]>(op, ['vault', 'list'], config);
   if (!vaults.length) return null;
   const vault = bail(
     await ui.select({ message: '1Password vault', options: vaults.map((v) => ({ value: v.id, label: v.name })) })
   );
-  const items = await opJson<{ id: string; title: string; category: string }[]>(op, ['item', 'list', '--vault', vault]);
+  const items = await listJson<{ id: string; title: string; category: string }[]>(op, ['item', 'list', '--vault', vault], config);
   if (!items.length) {
     ui.log.warn('That vault has no items.');
     return null;
@@ -86,9 +111,10 @@ async function pickFromOnePassword(op: string): Promise<{ ref: string; suggested
       options: items.map((i) => ({ value: i.id, label: i.title, hint: i.category.toLowerCase() })),
     })
   );
-  const item = await opJson<{ title: string; fields?: { label?: string; type?: string; purpose?: string; reference?: string }[] }>(
+  const item = await listJson<{ title: string; fields?: { label?: string; type?: string; purpose?: string; reference?: string }[] }>(
     op,
-    ['item', 'get', itemId, '--vault', vault]
+    ['item', 'get', itemId, '--vault', vault],
+    config
   );
   const fields = (item.fields ?? []).filter((f) => f.reference);
   if (!fields.length) {
@@ -106,18 +132,33 @@ async function pickFromOnePassword(op: string): Promise<{ ref: string; suggested
   return { ref: field.reference!, suggested: toSecretName(item.title, field.label ?? '') };
 }
 
-async function linkTool(provider: Provider, taken: Set<string>): Promise<Pending[]> {
+async function linkTool(provider: Provider, taken: Set<string>, config: Config): Promise<Pending[]> {
   const binary = locate(provider)!;
   if (!(await isSignedIn(provider))) {
     ui.log.warn(`${provider.label} is not signed in or is locked. ${provider.signInHint}`);
     if (!bail(await ui.confirm({ message: `Link ${provider.label} anyway?`, initialValue: false }))) return [];
+  }
+  if (provider.id === '1password') {
+    const mode = bail(
+      await ui.select({
+        message: 'How should keyhop pull from 1Password?',
+        options: [
+          { value: 'vaults', label: 'Whole vaults', hint: 'every item, and new ones on each sync; recommended' },
+          { value: 'items', label: 'Pick items one by one' },
+        ],
+      })
+    );
+    if (mode === 'vaults') {
+      await linkVaults(binary, config).catch((error: Error) => ui.log.error(`Could not list 1Password vaults: ${error.message}`));
+      return [];
+    }
   }
   const linked: Pending[] = [];
   for (;;) {
     let ref: string;
     let suggested = '';
     if (provider.id === '1password') {
-      const picked = await pickFromOnePassword(binary).catch((error: Error) => {
+      const picked = await pickFromOnePassword(binary, config).catch((error: Error) => {
         ui.log.error(`Could not browse 1Password: ${error.message}`);
         return null;
       });
@@ -260,14 +301,16 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
       })
     );
     const taken = new Set(Object.keys(config.secrets ?? {}));
-    for (const id of chosen) pending.push(...(await linkTool(installed.find((t) => t.provider.id === id)!.provider, taken)));
+    for (const id of chosen)
+      pending.push(...(await linkTool(installed.find((t) => t.provider.id === id)!.provider, taken, config)));
   } else {
     ui.log.warn('No supported password tools found; you can still use sync scripts.');
   }
 
+  // Whole-vault links change config even when nothing is pending.
+  config.secrets = { ...config.secrets, ...Object.fromEntries(pending.map((p) => [p.name, { ref: p.ref }])) };
+  await saveConfig(store.paths, config);
   if (pending.length) {
-    config.secrets = { ...config.secrets, ...Object.fromEntries(pending.map((p) => [p.name, { ref: p.ref }])) };
-    await saveConfig(store.paths, config);
     const rules = Object.fromEntries(
       pending.filter((p) => p.allow.length).map((p) => [p.name, { add: p.allow, bindTo: p.ref }])
     );

@@ -108,7 +108,7 @@ export function availableProviders(): Provider[] {
 
 export function locate(provider: Provider): string | null {
   if (provider.binary.startsWith('/')) return existsSync(provider.binary) ? provider.binary : null;
-  return Bun.which(provider.binary);
+  return Bun.which(provider.binary, { PATH: process.env.PATH ?? '' });
 }
 
 export async function isSignedIn(provider: Provider): Promise<boolean> {
