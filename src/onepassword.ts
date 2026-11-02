@@ -28,6 +28,7 @@ export interface OpItem {
 /** Values that aren't usable as a credential on their own. */
 const SKIPPED_TYPES = new Set(['OTP']);
 const MAX_OUTPUT = 64 * 1024 * 1024;
+const GET_CONCURRENCY = 6;
 
 export function toSecretName(...parts: string[]): string {
   return parts
@@ -120,10 +121,9 @@ function accountArgs(config: Config): string[] {
 }
 
 /** Runs `op … --format json`; errors carry op's stderr, never stdout. */
-export async function opJson(op: string, args: string[], config: Config, timeoutMs: number, input?: string): Promise<string> {
+export async function opJson(op: string, args: string[], config: Config, timeoutMs: number): Promise<string> {
   const result = await runProcess(op, [...args, ...accountArgs(config), '--format', 'json'], {
     timeoutMs,
-    input,
     maxBytes: MAX_OUTPUT,
   });
   if (result.timedOut) throw new Error(`op ${args.slice(0, 2).join(' ')} timed out.`);
@@ -147,11 +147,14 @@ export async function readVaults(
   for (const vault of vaults) {
     const label = vault.name ?? vault.id;
     try {
-      const list = await opJson(op, ['item', 'list', '--vault', vault.id], config, timeoutMs);
-      if (!(JSON.parse(list) as unknown[]).length) continue;
-      const items = parseJsonObjects(
-        await opJson(op, ['item', 'get', '-', '--reveal'], config, timeoutMs, list)
-      ) as OpItem[];
+      const list = JSON.parse(await opJson(op, ['item', 'list', '--vault', vault.id], config, timeoutMs)) as { id: string }[];
+      const get = async (id: string) =>
+        parseJsonObjects(await opJson(op, ['item', 'get', id, '--vault', vault.id, '--reveal'], config, timeoutMs)) as OpItem[];
+      // op won't read item ids from a Bun stdin pipe, so fetch each item. The
+      // first call alone, so 1Password shows one approval; then a few at a time.
+      const items: OpItem[] = list.length ? await get(list[0]!.id) : [];
+      for (let i = 1; i < list.length; i += GET_CONCURRENCY)
+        items.push(...(await Promise.all(list.slice(i, i + GET_CONCURRENCY).map((item) => get(item.id)))).flat());
       Object.assign(out, itemsToSecrets(items, vault.id, vault.fields, taken));
     } catch (error) {
       throw new Error(`1Password vault ${label}: ${(error as Error).message} ${provider.signInHint}`);

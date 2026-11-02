@@ -74,20 +74,24 @@ describe.if(unix)('readVaults through op', () => {
     await Promise.all(cleanups.splice(0).map((c) => c()));
   });
 
-  test('pipes the item list into op item get and keeps linked names', async () => {
+  test('fetches every listed item and keeps linked names', async () => {
     const { p, cleanup } = await tempHome();
     cleanups.push(cleanup);
     const bin = join(p.dir, 'bin');
     await mkdir(bin);
-    // Fake op: `item list` prints ids; `item get -` checks stdin got the list.
+    // Fake op: 8 items (more than one batch); like real op, `item get -` is refused.
     await writeFile(
       join(bin, 'op'),
       `#!/bin/sh
 case "$1 $2" in
-  "item list") echo '[{"id":"i1"}]' ;;
-  "item get") input=$(cat); case "$input" in *i1*) ;; *) exit 9 ;; esac
-    echo '{"id":"i1","title":"Stripe","fields":[{"id":"k","type":"CONCEALED","label":"key","value":"sk_1"}]}'
-    echo '{"id":"i2","title":"Linked","fields":[{"id":"k","type":"CONCEALED","label":"key","value":"x"}]}' ;;
+  "item list") echo '[{"id":"i1"},{"id":"i2"},{"id":"i3"},{"id":"i4"},{"id":"i5"},{"id":"i6"},{"id":"i7"},{"id":"i8"}]' ;;
+  "item get")
+    case "$3" in
+      i1) echo '{"id":"i1","title":"Stripe","fields":[{"id":"k","type":"CONCEALED","label":"key","value":"sk_1"}]}' ;;
+      i2) echo '{"id":"i2","title":"Linked","fields":[{"id":"k","type":"CONCEALED","label":"key","value":"x"}]}' ;;
+      i[3-8]) echo "{\\"id\\":\\"$3\\",\\"title\\":\\"Item $3\\",\\"fields\\":[{\\"id\\":\\"k\\",\\"type\\":\\"CONCEALED\\",\\"label\\":\\"key\\",\\"value\\":\\"v$3\\"}]}" ;;
+      *) exit 9 ;;
+    esac ;;
   *) exit 1 ;;
 esac
 `
@@ -96,6 +100,8 @@ esac
     process.env.PATH = `${bin}:${originalPath}`;
     const out = await readVaults({ onePassword: { vaults: [{ id: 'v1' }] } }, 2000, new Set(['LINKED_KEY']));
     expect(out.STRIPE_KEY).toEqual({ value: 'sk_1', origin: 'op://v1/i1/k' });
+    expect(out.ITEM_I8_KEY?.value).toBe('vi8');
+    expect(Object.keys(out)).toHaveLength(8);
     expect(out.LINKED_KEY).toBeUndefined();
     expect(out.LINKED_KEY_2).toBeDefined();
   });
