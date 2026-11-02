@@ -171,9 +171,17 @@ main() {
   esac
 
   local data_dir="${KEYHOP_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/keyhop}"
-  if [[ "$run_setup" == true && ! -f "$data_dir/vault.enc" ]] && { : </dev/tty; } 2>/dev/null; then
+  # Under curl | bash, stdin is the pipe. Bun can't watch /dev/tty itself
+  # (kqueue: EINVAL), so hand setup the real terminal device behind stdout.
+  local tty_dev=''
+  if [[ -t 0 ]]; then
+    tty_dev=/dev/stdin
+  elif [[ -t 1 ]]; then
+    tty_dev="$(tty <&1 2>/dev/null)" || tty_dev=''
+  fi
+  if [[ "$run_setup" == true && ! -f "$data_dir/vault.enc" && "$tty_dev" == /dev/* && "$tty_dev" != /dev/tty ]]; then
     step 'Setup'
-    "$bin_dir/keyhop" setup </dev/tty || info 'Setup did not finish; rerun it any time with: keyhop setup'
+    "$bin_dir/keyhop" setup <"$tty_dev" || info 'Setup did not finish; rerun it any time with: keyhop setup'
   else
     printf '\nkeyhop installed. Next: keyhop setup (first time) or keyhop doctor\n'
   fi
