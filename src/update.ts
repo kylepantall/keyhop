@@ -23,6 +23,24 @@ async function fetchText(url: string): Promise<string> {
   return response.text();
 }
 
+/**
+ * Resolves a branch or tag to its commit. raw.githubusercontent caches a
+ * branch URL for up to 5 minutes; a commit URL is never stale.
+ */
+export async function resolveRef(ref: string): Promise<string> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${REPO}/commits/${ref}`, {
+      headers: { Accept: 'application/vnd.github.sha' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const sha = response.ok ? (await response.text()).trim() : '';
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : ref;
+  } catch {
+    // Rate-limited or offline: fall back to the (possibly cached) branch URL.
+    return ref;
+  }
+}
+
 export async function latestVersion(ref: string): Promise<string> {
   const pkg = JSON.parse(await fetchText(raw(ref, 'package.json'))) as { version?: string };
   if (!pkg.version) throw new Error('package.json on GitHub has no version.');
@@ -47,9 +65,12 @@ export async function runUpdateCommand(args: string[]): Promise<number> {
   if (!REF.test(ref) || ref.includes('..')) throw new Error(`Invalid ref: ${ref}`);
   const force = args.includes('--force');
 
-  const latest = await latestVersion(ref);
+  const commit = await resolveRef(ref);
+  const latest = await latestVersion(commit);
   const diff = compareVersions(latest, VERSION);
   console.log(`Installed ${VERSION}; ${REPO}@${ref} has ${latest}.`);
+  // Install exactly the commit that was checked.
+  ref = commit;
   if (args.includes('--check')) return diff > 0 ? 10 : 0;
   if (diff <= 0 && !force) {
     console.log(diff === 0 ? 'Already up to date.' : 'Installed version is newer; use --force to install it anyway.');

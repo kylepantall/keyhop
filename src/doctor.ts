@@ -7,7 +7,7 @@ import type { Paths } from './paths.ts';
 import type { Config } from './types.ts';
 import { availableProviders, isSignedIn, locate, providerFor } from './providers.ts';
 import { interpreterFor, listScripts } from './sync.ts';
-import { compareVersions, latestVersion } from './update.ts';
+import { compareVersions, latestVersion, resolveRef } from './update.ts';
 import { VERSION } from './version.ts';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info';
@@ -27,7 +27,7 @@ export async function runChecks(p: Paths): Promise<Check[]> {
 
   add('keyhop', 'info', `${VERSION} (${process.platform}/${process.arch}, data in ${p.dir})`);
   try {
-    const latest = await latestVersion('main');
+    const latest = await latestVersion(await resolveRef('main'));
     if (compareVersions(latest, VERSION) > 0) add('update', 'warn', `${latest} is available`, 'keyhop update');
   } catch {
     add('update', 'info', 'could not check GitHub for a newer version');
