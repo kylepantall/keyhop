@@ -8,7 +8,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { REPO, windowsSystem } from './paths.ts';
+import { compiled, REPO } from './paths.ts';
+import { installWindowsRelease } from './release.ts';
 import { VERSION } from './version.ts';
 
 const REF = /^[A-Za-z0-9._/-]+$/;
@@ -76,17 +77,22 @@ export async function runUpdateCommand(args: string[]): Promise<number> {
     console.log(diff === 0 ? 'Already up to date.' : 'Installed version is newer; use --force to install it anyway.');
     return 0;
   }
+  if (process.platform === 'win32') {
+    // Windows runs the compiled release; it updates from GitHub Releases only.
+    if (!compiled) throw new Error('This copy runs from source; update it with git pull.');
+    if (args.includes('--ref')) throw new Error('On Windows, keyhop updates to the latest release; --ref is not supported.');
+    await installWindowsRelease(latest);
+    console.log(`Updated to ${latest}. Restart Claude Code to load it.`);
+    return 0;
+  }
   if (!process.env.KEYHOP_LAUNCHER)
     throw new Error('This copy was not installed by the installer; update it with git pull.');
 
-  const windows = process.platform === 'win32';
   const dir = await mkdtemp(join(tmpdir(), 'keyhop-update-'));
   try {
-    const script = join(dir, windows ? 'install.ps1' : 'install.sh');
-    await writeFile(script, await fetchText(raw(ref, `scripts/${windows ? 'install.ps1' : 'install.sh'}`)));
-    const [command, argv] = windows
-      ? [windowsSystem('powershell.exe'), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Ref', ref]]
-      : ['bash', [script, ref]];
+    const script = join(dir, 'install.sh');
+    await writeFile(script, await fetchText(raw(ref, 'scripts/install.sh')));
+    const [command, argv] = ['bash', [script, ref]];
     const code = await new Promise<number>((resolve, reject) => {
       const child = spawn(command, argv as string[], { stdio: 'inherit' });
       child.on('error', reject);

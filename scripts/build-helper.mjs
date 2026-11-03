@@ -1,13 +1,13 @@
-// Builds the macOS Touch ID helper for a checkout (the installer does this itself).
+// Builds the biometric helper for a checkout into native/build: the Touch ID
+// helper on macOS (swiftc), keyhop-hello.exe on Windows (dotnet SDK). The
+// installers and the release workflow build their own copies.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 
-if (process.platform !== 'darwin') {
-  console.log('Nothing to build: the Windows Hello helper is a PowerShell script.');
-  process.exit(0);
-}
 mkdirSync('native/build', { recursive: true });
-const result = spawnSync('swiftc', ['-O', 'native/macos/keyhop-auth.swift', '-o', 'native/build/keyhop-auth'], {
-  stdio: 'inherit',
-});
+const [command, args] =
+  process.platform === 'win32'
+    ? ['dotnet', ['build', 'native/windows/KeyhopHello', '-c', 'Release', '-o', 'native/build', '--nologo']]
+    : ['swiftc', ['-O', 'native/macos/keyhop-auth.swift', '-o', 'native/build/keyhop-auth']];
+const result = spawnSync(command, args, { stdio: 'inherit' });
 process.exit(result.status ?? 1);

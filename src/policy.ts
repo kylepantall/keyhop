@@ -23,6 +23,8 @@ const BLOCKED = new Set([
   'nice', 'exec', 'eval', 'open', 'start', 'npx', 'bunx', 'pnpx', 'uvx', 'pipx', 'make',
   'vi', 'vim', 'nvim', 'emacs', 'nano', 'ed', 'ex', 'less', 'more', 'man',
   'printenv', 'set', 'echo', 'cat', 'tee', 'base64', 'xxd', 'od', 'hexdump', 'strings',
+  // The compiled keyhop.exe is Bun inside (BUN_BE_BUN runs any script).
+  'keyhop',
 ]);
 
 /** python3.12, perl5.34, tclsh8.6 … */
@@ -46,7 +48,12 @@ function assertNameAllowable(path: string): void {
 /** Checks both the path asked for and what it really points at. */
 export function assertAllowable(path: string): void {
   assertNameAllowable(path);
-  if (existsSync(path)) assertNameAllowable(realpathSync(path));
+  if (!existsSync(path)) return;
+  const real = realpathSync(path);
+  assertNameAllowable(real);
+  // keyhop's own runtime (Bun, or the compiled keyhop.exe) under any name.
+  if (real === realpathSync(process.execPath))
+    throw new Error(`${path} is keyhop's own runtime, so it cannot be given secrets.`);
 }
 
 /** A bare command name looked up on PATH, or an absolute path. */

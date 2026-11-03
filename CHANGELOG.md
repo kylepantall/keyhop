@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Windows now installs from GitHub Releases: a compiled `keyhop.exe` and a C# `keyhop-hello.exe` for Windows Hello and the access dialog. Antivirus flagged the old `.cmd` launcher and PowerShell helpers; no PowerShell runs after install. `keyhop update` downloads and verifies the release itself.
+- Security: keyhop never loads `bunfig.toml` or `.env` from the folder it is started in (macOS launcher starts in its own folder; Windows exe built without autoload). keyhop's own runtime can't be allowed for secrets, and `BUN_*` names are reserved.
+- Upgrading from 0.3.x on Windows re-points the Claude Code registration from `keyhop.cmd` to `keyhop.exe`.
+
 ## 0.3.2
 
 - Fix (Windows): creating the vault failed with `Cannot convert … to type "Windows.Storage.Streams.IBuffer"`. The buffer conversions are now tested on Windows CI.

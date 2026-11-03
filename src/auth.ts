@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { appRoot, windowsSystem } from './paths.ts';
+import { appRoot } from './paths.ts';
 import { runProcess } from './process.ts';
 import type { AuthAction, Authenticator, KeyFile } from './types.ts';
 
@@ -14,23 +14,18 @@ const CANCELLED = 2;
 const KEY_EXISTS = 3;
 
 export const macHelperPath = join(appRoot, 'native', 'build', 'keyhop-auth');
-export const windowsHelperPath = join(appRoot, 'native', 'windows', 'keyhop-auth.ps1');
+/** Built by CI into the release (and by `bun run build:helper` in a checkout). */
+export const windowsHelperPath = join(appRoot, 'native', 'build', 'keyhop-hello.exe');
 
 export function isSupportedPlatform(): boolean {
   return process.platform === 'darwin' || process.platform === 'win32';
 }
 
 async function runHelper(args: string[], input: object): Promise<string> {
-  const [command, prefix] =
-    process.platform === 'darwin'
-      ? [macHelperPath, []]
-      : [
-          windowsSystem('powershell.exe'),
-          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', windowsHelperPath],
-        ];
-  if (process.platform === 'darwin' && !existsSync(macHelperPath))
-    throw new Error('Touch ID helper is not built. Rerun the installer, or run: bun run build:helper');
-  const result = await runProcess(command, [...prefix, ...args], {
+  const command = process.platform === 'darwin' ? macHelperPath : windowsHelperPath;
+  if (!existsSync(command))
+    throw new Error('The biometric helper is missing. Rerun the installer, or in a checkout run: bun run build:helper');
+  const result = await runProcess(command, args, {
     input: JSON.stringify(input),
     timeoutMs: 120_000,
   });

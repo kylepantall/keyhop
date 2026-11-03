@@ -4,8 +4,20 @@ import { homedir } from 'node:os';
 import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Root of this checkout or install (holds src/, native/). */
-export const appRoot = fileURLToPath(new URL('..', import.meta.url));
+/** Replaced with `true` by `bun build --define` (scripts/build-windows.ps1); never set at runtime. */
+declare const KEYHOP_COMPILED: boolean | undefined;
+
+/**
+ * True inside the compiled release executable (keyhop.exe), whose sources
+ * live in Bun's virtual file system rather than on disk.
+ */
+export const compiled = typeof KEYHOP_COMPILED !== 'undefined' && KEYHOP_COMPILED === true;
+
+/**
+ * Root of this checkout or install (holds native/, examples/). For the
+ * compiled release, the folder holding keyhop.exe.
+ */
+export const appRoot = compiled ? dirname(process.execPath) : fileURLToPath(new URL('..', import.meta.url));
 
 export const REPO = process.env.KEYHOP_REPO ?? 'kylepantall/keyhop';
 
@@ -13,7 +25,7 @@ export const REPO = process.env.KEYHOP_REPO ?? 'kylepantall/keyhop';
  * Full paths to Windows system programs. Windows searches the working
  * directory before PATH, so a bare `powershell.exe` could run a planted copy.
  */
-export function windowsSystem(program: 'powershell.exe' | 'cmd.exe' | 'taskkill.exe'): string {
+export function windowsSystem(program: 'powershell.exe' | 'cmd.exe' | 'taskkill.exe' | 'tar.exe'): string {
   const system32 = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
   return program === 'powershell.exe'
     ? win32.join(system32, 'WindowsPowerShell', 'v1.0', program)

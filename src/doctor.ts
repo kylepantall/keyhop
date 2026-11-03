@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { isSupportedPlatform, macHelperPath, windowsHelperPath } from './auth.ts';
 import { claudeRegistration } from './claude.ts';
 import { loadConfig } from './config.ts';
-import { windowsSystem, type Paths } from './paths.ts';
+import type { Paths } from './paths.ts';
 import type { Config } from './types.ts';
 import { availableProviders, isSignedIn, locate, providerFor } from './providers.ts';
 import { interpreterFor, listScripts } from './sync.ts';
@@ -39,9 +39,8 @@ export async function runChecks(p: Paths): Promise<Check[]> {
     if (existsSync(macHelperPath)) add('biometrics', 'ok', 'Touch ID helper built');
     else add('biometrics', 'fail', 'Touch ID helper missing', 'xcode-select --install, then rerun the installer');
   } else {
-    const ps = existsSync(windowsSystem('powershell.exe'));
-    if (ps && existsSync(windowsHelperPath)) add('biometrics', 'ok', 'Windows Hello helper present');
-    else add('biometrics', 'fail', 'powershell.exe or the Windows Hello helper is missing', 'Rerun the installer');
+    if (existsSync(windowsHelperPath)) add('biometrics', 'ok', 'Windows Hello helper present');
+    else add('biometrics', 'fail', 'Windows Hello helper (keyhop-hello.exe) is missing', 'Rerun the installer');
   }
 
   if (existsSync(p.key) && existsSync(p.vault)) add('vault', 'ok', 'created');

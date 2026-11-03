@@ -1,4 +1,7 @@
 node_modules/
 native/build/
+native/windows/KeyhopHello/bin/
+native/windows/KeyhopHello/obj/
+dist/
 *.tmp
 .DS_Store

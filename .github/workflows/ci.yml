@@ -23,15 +23,63 @@ jobs:
       - name: Build Touch ID helper
         if: runner.os == 'macOS'
         run: bun run build:helper
+      - name: Install from this checkout
+        if: runner.os == 'macOS'
+        run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version
+
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: 8.0.x
       - name: Parse PowerShell scripts
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          foreach ($f in 'scripts/install.ps1', 'native/windows/keyhop-auth.ps1') {
+          foreach ($f in 'scripts/install.ps1', 'scripts/build-windows.ps1') {
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors) | Out-Null
             if ($errors) { $errors; exit 1 }
           }
-      - name: Install from this checkout
-        if: runner.os == 'macOS'
-        run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version
+      - name: Build Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+      - name: Smoke test the compiled release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $app = Resolve-Path dist/keyhop
+          # The Hello helper loads WinRT; CI runners have no Hello, so it reports false.
+          & "$app/native/build/keyhop-hello.exe" probe
+          if ($LASTEXITCODE -ne 0) { throw 'keyhop-hello probe failed' }
+          & "$app/keyhop.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'keyhop.exe --version failed' }
+          # doctor finds the helper next to the compiled exe.
+          $env:KEYHOP_HOME = Join-Path $env:RUNNER_TEMP 'kh'
+          $checks = & "$app/keyhop.exe" doctor --json | ConvertFrom-Json
+          $bio = $checks | Where-Object area -eq 'biometrics'
+          if ($bio.status -ne 'ok') { throw "doctor biometrics: $($bio.status) $($bio.detail)" }
+          # Sync scripts in .mjs run with the compiled exe acting as Bun.
+          Set-Content (Join-Path $env:RUNNER_TEMP 'probe.mjs') "console.log('mjs-ok')"
+          $env:BUN_BE_BUN = '1'
+          $out = & "$app/keyhop.exe" (Join-Path $env:RUNNER_TEMP 'probe.mjs')
+          Remove-Item Env:BUN_BE_BUN
+          if ("$out" -ne 'mjs-ok') { throw "BUN_BE_BUN did not run the script: $out" }
+          # A bunfig.toml preload or .env planted in the working folder must not load.
+          $trap = Join-Path $env:RUNNER_TEMP 'trap'
+          New-Item -ItemType Directory -Force $trap | Out-Null
+          Set-Content (Join-Path $trap 'pwned.js') "require('fs').writeFileSync('$($trap -replace '\\','/')/pwned.txt', 'x')"
+          Set-Content (Join-Path $trap 'bunfig.toml') 'preload = ["./pwned.js"]'
+          Set-Content (Join-Path $trap '.env') 'KEYHOP_REPO=attacker/repo'
+          Push-Location $trap
+          try { & "$app/keyhop.exe" --version | Out-Null } finally { Pop-Location }
+          if (Test-Path (Join-Path $trap 'pwned.txt')) { throw 'keyhop.exe loaded bunfig.toml from the working folder' }
+      - name: Install the built release
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:KEYHOP_RELEASE_DIR = Resolve-Path dist
+          $env:KEYHOP_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'keyhop-install'
+          & ./scripts/install.ps1 -NoSetup
+          & (Join-Path $env:KEYHOP_INSTALL_DIR 'app\keyhop.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'installed keyhop.exe failed' }

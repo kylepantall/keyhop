@@ -40,7 +40,9 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   if (!request.secrets.length) throw new Error('Name at least one secret to inject.');
   const path = resolveExecutable(request.command);
   assertAllowable(path);
-  const cwd = request.cwd ?? process.cwd();
+  // The launcher starts keyhop in its own folder (so Bun never loads a planted
+  // bunfig.toml or .env) and passes the folder it was started from.
+  const cwd = request.cwd ?? process.env.KEYHOP_CWD ?? process.cwd();
   if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory())
     throw new Error(`cwd must be an existing absolute directory: ${cwd}`);
 
