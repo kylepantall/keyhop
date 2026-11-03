@@ -5,6 +5,8 @@ import { runProcess } from './process.ts';
 import type { AuthAction, Authenticator, KeyFile } from './types.ts';
 
 export class AuthCancelledError extends Error {}
+/** Windows: a keyhop Hello key already exists (one Hello key per Windows account). */
+export class KeyExistsError extends Error {}
 
 /** Exit code both helpers use when the user cancels or fails the prompt. */
 const CANCELLED = 2;
@@ -34,7 +36,7 @@ async function runHelper(args: string[], input: object): Promise<string> {
   });
   if (result.code === CANCELLED) throw new AuthCancelledError('Authentication was cancelled.');
   if (result.code === KEY_EXISTS)
-    throw new Error('A keyhop Windows Hello key already exists. To replace it (any old vault becomes unreadable), run: keyhop setup --reset');
+    throw new KeyExistsError('A keyhop Windows Hello key already exists. To replace it (any old vault becomes unreadable), run: keyhop setup --reset');
   if (result.code !== 0 || result.timedOut)
     throw new Error(`Biometric helper failed: ${result.stderr.trim() || `exit ${result.code}`}`);
   return result.stdout.trim();

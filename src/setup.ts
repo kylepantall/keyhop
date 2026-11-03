@@ -4,7 +4,7 @@ import * as ui from '@clack/prompts';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSupportedPlatform } from './auth.ts';
+import { isSupportedPlatform, KeyExistsError } from './auth.ts';
 import { claudeRegistration, registerWithClaude } from './claude.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { formatChecks, runChecks } from './doctor.ts';
@@ -266,7 +266,21 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
         })
       );
     ui.log.step(process.platform === 'darwin' ? 'Creating your vault — confirm with Touch ID.' : 'Creating your vault — confirm with Windows Hello (twice).');
-    await store.initialize({ biometryOnly, replace: reset });
+    try {
+      await store.initialize({ biometryOnly, replace: reset });
+    } catch (error) {
+      // No key.json here, so the Hello key is left from a setup that didn't finish.
+      if (!(error instanceof KeyExistsError)) throw error;
+      const replace = bail(
+        await ui.confirm({
+          message:
+            'A keyhop Windows Hello key from an earlier, unfinished setup exists. Replace it? ' +
+            '(Only a keyhop vault in another data folder on this Windows account would stop opening.)',
+        })
+      );
+      if (!replace) return 1;
+      await store.initialize({ biometryOnly, replace: true });
+    }
     ui.log.success(`Vault created in ${store.paths.dir}`);
   } else {
     ui.log.info(`Using the existing vault in ${store.paths.dir}`);

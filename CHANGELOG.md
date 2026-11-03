@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Fix (Windows): creating the vault failed with `Cannot find an overload for "ToArray"`.
+- Setup offers to replace a Windows Hello key left by a setup that didn't finish.
+
 ## 0.3.0
 
 - Access requests: when Claude runs a program a secret isn't allowed for, keyhop asks you (Deny / Allow once / Always allow), confirmed with Touch ID / Windows Hello. Off with `"askForAccess": false`.
