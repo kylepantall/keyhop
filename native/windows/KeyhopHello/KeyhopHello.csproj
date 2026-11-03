@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    keyhop-hello.exe: Windows Hello key and access dialog for keyhop.
+    Targets .NET Framework 4.8 (part of Windows 10 1903+ and 11), so the exe is
+    small and needs no runtime download. WinRT comes from the SDK contracts.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>keyhop-hello</AssemblyName>
+    <RootNamespace>Keyhop</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Deterministic>true</Deterministic>
+    <Product>keyhop</Product>
+    <Company>kylepantall</Company>
+    <Description>Windows Hello unlock and access prompts for keyhop</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" />
+  </ItemGroup>
+</Project>

@@ -5,8 +5,7 @@
  * dialog alone is never enough.
  */
 
-import { join } from 'node:path';
-import { appRoot, windowsSystem } from './paths.ts';
+import { windowsHelperPath } from './auth.ts';
 import { runProcess } from './process.ts';
 
 export type Decision = 'deny' | 'once' | 'always';
@@ -24,8 +23,6 @@ export type Approver = (request: AccessRequest) => Promise<Decision>;
 const MAX_ARGS_CHARS = 600;
 const MAX_PATH_CHARS = 300;
 const ANSWER_MS = 125_000;
-
-export const windowsAskPath = join(appRoot, 'native', 'windows', 'keyhop-ask.ps1');
 
 /** Where package managers and the OS put programs; anything else gets a warning. */
 const USUAL_PLACES = /^(\/usr\/|\/bin\/|\/sbin\/|\/opt\/homebrew\/|\/Applications\/|[A-Za-z]:\\(Program Files|Program Files \(x86\)|Windows)\\)/i;
@@ -88,11 +85,10 @@ export function platformApprover(): Approver | null {
     };
   if (process.platform === 'win32')
     return async (request) => {
-      const result = await runProcess(
-        windowsSystem('powershell.exe'),
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA', '-File', windowsAskPath],
-        { timeoutMs: ANSWER_MS, env: { ...process.env, KEYHOP_ASK_MESSAGE: describeRequest(request) } }
-      );
+      const result = await runProcess(windowsHelperPath, ['ask'], {
+        timeoutMs: ANSWER_MS,
+        env: { ...process.env, KEYHOP_ASK_MESSAGE: describeRequest(request) },
+      });
       const answer = result.stdout.trim();
       return result.code === 0 && (answer === 'once' || answer === 'always') ? answer : 'deny';
     };

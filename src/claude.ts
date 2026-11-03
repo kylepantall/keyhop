@@ -1,11 +1,12 @@
 import { join } from 'node:path';
-import { appRoot } from './paths.ts';
+import { appRoot, compiled } from './paths.ts';
 import { runProcess } from './process.ts';
 
 /** argv that starts this install's MCP server. */
 export function serverCommand(): string[] {
+  if (compiled) return [process.execPath, 'serve'];
   const launcher = process.env.KEYHOP_LAUNCHER;
-  if (launcher) return process.platform === 'win32' ? ['cmd', '/c', launcher, 'serve'] : [launcher, 'serve'];
+  if (launcher) return [launcher, 'serve'];
   return [process.execPath, join(appRoot, 'src', 'index.ts'), 'serve'];
 }
 
