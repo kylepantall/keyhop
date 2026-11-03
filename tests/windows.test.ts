@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +14,8 @@ describe('compiled keyhop.exe', () => {
   let dir = '';
   let exe = '';
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'keyhop-compile-'));
+    // Real path: macOS's tmpdir is a symlink (/var -> /private/var), and Windows may give a short 8.3 name.
+    dir = realpathSync.native(await mkdtemp(join(tmpdir(), 'keyhop-compile-')));
     exe = join(dir, process.platform === 'win32' ? 'keyhop.exe' : 'keyhop');
     const built = spawnSync(process.execPath, ['build', '--compile', join(root, 'src', 'index.ts'), '--outfile', exe], {
       encoding: 'utf8',
