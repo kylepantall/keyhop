@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Fix (Windows): creating the vault failed with `Cannot convert … to type "Windows.Storage.Streams.IBuffer"`. The buffer conversions are now tested on Windows CI.
+
 ## 0.3.1
 
 - Fix (Windows): creating the vault failed with `Cannot find an overload for "ToArray"`.
