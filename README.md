@@ -18,6 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/ins
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.ps1)))
 ```
 
+On Windows keyhop is two compiled programs from the [latest release](https://github.com/kylepantall/keyhop/releases/latest): `keyhop.exe` and `keyhop-hello.exe` (Windows Hello and the access dialog). The installer checks both against the release's `SHA256SUMS` and puts them in `%LOCALAPPDATA%\keyhop\bin`. No PowerShell scripts or `.cmd` launchers are installed or run afterwards. The programs aren't code-signed yet, so SmartScreen or antivirus may still ask about them.
+
 On a first install the installer starts `keyhop setup`, which:
 
 1. creates the vault (one Touch ID / Hello prompt)
@@ -29,7 +31,7 @@ On a first install the installer starts `keyhop setup`, which:
 |---|---|---|
 | Register with Claude Code, no prompt | `bash -s -- --claude` | `-Claude` |
 | Skip the setup wizard | `--no-setup` | `-NoSetup` |
-| Install a branch or tag | `bash -s -- v0.2.0` | `-Ref v0.2.0` |
+| Install a version | `bash -s -- v0.2.0` (branch or tag) | `-Version v0.4.0` (release tag) |
 
 ## Commands
 
@@ -125,5 +127,7 @@ Shells and interpreters are still refused without asking, and only one request c
 ```bash
 bun install && bun run build:helper && bun test && bun run typecheck
 ```
+
+On Windows, `build:helper` builds `keyhop-hello.exe` and needs the .NET SDK; `bun run build:windows` builds the release files into `dist/`. To release, bump `package.json` and `CHANGELOG.md`, then push a matching tag (`git tag v0.4.0 && git push origin v0.4.0`): CI builds the Windows programs and publishes them with `SHA256SUMS`.
 
 Data lives in `~/.config/keyhop` (macOS) or `%APPDATA%\keyhop`; override with `KEYHOP_HOME`. MIT licensed.

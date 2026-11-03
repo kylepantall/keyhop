@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Windows: keyhop is now two compiled programs, `keyhop.exe` (built with `bun build --compile`) and `keyhop-hello.exe` (C#: Windows Hello signing and the access dialog), so nothing runs PowerShell with `-ExecutionPolicy Bypass` or a `.cmd` launcher any more. Antivirus (Bitdefender) quarantined those as malware-like.
+- Windows: CI builds both programs for each version tag and publishes them on a GitHub Release with `SHA256SUMS`. The installer and `keyhop update` download a release and check every file before installing it. The installer removes the old `keyhop.cmd`, source copy and private Bun, and re-registers keyhop with Claude Code if the registration pointed at `keyhop.cmd`.
+- Windows installer: `-Version v0.4.0` replaces `-Ref`.
+
 ## 0.3.2
 
 - Fix (Windows): creating the vault failed with `Cannot convert … to type "Windows.Storage.Streams.IBuffer"`. The buffer conversions are now tested on Windows CI.

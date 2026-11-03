@@ -1,7 +1,7 @@
 /** `keyhop setup`: guided first run — vault, password tools, allowlists, first sync. */
 
 import * as ui from '@clack/prompts';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSupportedPlatform, KeyExistsError } from './auth.ts';
@@ -9,7 +9,7 @@ import { claudeRegistration, registerWithClaude } from './claude.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { formatChecks, runChecks } from './doctor.ts';
 import { opJson, toSecretName } from './onepassword.ts';
-import { appRoot } from './paths.ts';
+import { EXAMPLE_SCRIPTS } from './examples.ts';
 import { availableProviders, isSignedIn, locate, providerFor, type Provider } from './providers.ts';
 import { changeAllowed, resolveAllowed, syncVault } from './secrets.ts';
 import type { VaultStore } from './store.ts';
@@ -228,7 +228,7 @@ async function offerStarterScript(syncDir: string): Promise<void> {
     ui.log.info(`${target} already exists.`);
     return;
   }
-  await copyFile(join(appRoot, 'examples', 'sync.d', file), target);
+  await writeFile(target, EXAMPLE_SCRIPTS[file]!, { mode: 0o600 });
   ui.log.success(`Wrote ${target}. Edit it, then rename it without the leading _ to enable it.`);
 }
 

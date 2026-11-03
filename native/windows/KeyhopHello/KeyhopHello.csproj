@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    keyhop-hello.exe: Windows Hello signing and the access dialog for keyhop.
+    Targets .NET Framework 4.8, which every supported Windows 10/11 has, so
+    the result is one small exe with nothing else to install. Built by CI
+    (scripts/build-windows.mjs) and shipped on GitHub Releases.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <!-- A GUI-subsystem exe: no console window flashes when keyhop runs it.
+         Redirected stdin/stdout/stderr still work. -->
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>keyhop-hello</AssemblyName>
+    <RootNamespace>KeyhopHello</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <LangVersion>latest</LangVersion>
+    <DebugType>none</DebugType>
+    <Product>keyhop</Product>
+    <Description>keyhop Windows Hello helper</Description>
+    <Company>Kyle Pantall</Company>
+    <Copyright>MIT License</Copyright>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <!-- WinRT projections (Windows.Security.Credentials) for .NET Framework. -->
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.2" />
+    <!-- Lets the build run without the 4.8 targeting pack installed. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

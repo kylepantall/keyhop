@@ -12,7 +12,7 @@ import { extname, join } from 'node:path';
 import { assertName } from './config.ts';
 import { readVaults } from './onepassword.ts';
 import { readSecret, providerFor } from './providers.ts';
-import { windowsSystem } from './paths.ts';
+import { isCompiled, windowsSystem } from './paths.ts';
 import { hashFile } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
@@ -59,7 +59,7 @@ export async function listScripts(syncDir: string): Promise<string[]> {
 export function interpreterFor(
   file: string,
   platform: NodeJS.Platform = process.platform
-): { command: string; args: string[] } | { error: string } {
+): { command: string; args: string[]; env?: Record<string, string> } | { error: string } {
   const windows = platform === 'win32';
   switch (extname(file).toLowerCase()) {
     case '.sh': {
@@ -74,7 +74,10 @@ export function interpreterFor(
     case '.mjs':
     case '.cjs':
     case '.ts':
-      return { command: process.execPath, args: [file] };
+      // A compiled keyhop.exe is Bun inside; BUN_BE_BUN makes it act as plain bun.
+      return isCompiled
+        ? { command: process.execPath, args: [file], env: { BUN_BE_BUN: '1' } }
+        : { command: process.execPath, args: [file] };
     case '.py':
       return { command: windows ? 'python' : 'python3', args: [file] };
     case '.cmd':
@@ -168,7 +171,7 @@ export async function planSteps(
         const origin = `${file}#${await hashFile(path)}`;
         const result = await runProcess(how.command, how.args, {
           cwd: syncDir,
-          env: { ...process.env, KEYHOP_STEP: file, KEYHOP_SYNC_DIR: syncDir },
+          env: { ...process.env, ...how.env, KEYHOP_STEP: file, KEYHOP_SYNC_DIR: syncDir },
           timeoutMs: stepTimeoutMs,
         });
         if (result.timedOut) throw new Error(`${file}: timed out after ${stepTimeoutMs / 1000}s.`);

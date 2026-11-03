@@ -4,8 +4,10 @@ import { runProcess } from './process.ts';
 
 /** argv that starts this install's MCP server. */
 export function serverCommand(): string[] {
+  // keyhop.exe is a real program: Claude Code starts it directly, no cmd /c.
+  if (appRoot === null) return [process.execPath, 'serve'];
   const launcher = process.env.KEYHOP_LAUNCHER;
-  if (launcher) return process.platform === 'win32' ? ['cmd', '/c', launcher, 'serve'] : [launcher, 'serve'];
+  if (launcher) return [launcher, 'serve'];
   return [process.execPath, join(appRoot, 'src', 'index.ts'), 'serve'];
 }
 

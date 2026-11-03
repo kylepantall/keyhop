@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import { isSupportedPlatform, macHelperPath, windowsHelperPath } from './auth.ts';
 import { claudeRegistration } from './claude.ts';
 import { loadConfig } from './config.ts';
-import { windowsSystem, type Paths } from './paths.ts';
+import { appRoot, type Paths } from './paths.ts';
 import type { Config } from './types.ts';
 import { availableProviders, isSignedIn, locate, providerFor } from './providers.ts';
 import { interpreterFor, listScripts } from './sync.ts';
-import { compareVersions, latestVersion, resolveRef } from './update.ts';
+import { availableVersion, compareVersions } from './update.ts';
 import { VERSION } from './version.ts';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'info';
@@ -25,9 +25,9 @@ export async function runChecks(p: Paths): Promise<Check[]> {
   const add = (area: string, status: CheckStatus, detail: string, fix?: string) =>
     checks.push({ area, status, detail, fix });
 
-  add('keyhop', 'info', `${VERSION} (${process.platform}/${process.arch}, data in ${p.dir})`);
+  add('keyhop', 'info', `${VERSION} (${process.platform}/${process.arch}, ${appRoot === null ? `compiled: ${process.execPath}` : `source: ${appRoot}`}, data in ${p.dir})`);
   try {
-    const latest = await latestVersion(await resolveRef('main'));
+    const latest = await availableVersion();
     if (compareVersions(latest, VERSION) > 0) add('update', 'warn', `${latest} is available`, 'keyhop update');
   } catch {
     add('update', 'info', 'could not check GitHub for a newer version');
@@ -39,9 +39,14 @@ export async function runChecks(p: Paths): Promise<Check[]> {
     if (existsSync(macHelperPath)) add('biometrics', 'ok', 'Touch ID helper built');
     else add('biometrics', 'fail', 'Touch ID helper missing', 'xcode-select --install, then rerun the installer');
   } else {
-    const ps = existsSync(windowsSystem('powershell.exe'));
-    if (ps && existsSync(windowsHelperPath)) add('biometrics', 'ok', 'Windows Hello helper present');
-    else add('biometrics', 'fail', 'powershell.exe or the Windows Hello helper is missing', 'Rerun the installer');
+    if (existsSync(windowsHelperPath)) add('biometrics', 'ok', `Windows Hello helper present (${windowsHelperPath})`);
+    else
+      add(
+        'biometrics',
+        'fail',
+        `Windows Hello helper missing (${windowsHelperPath})`,
+        appRoot === null ? 'Rerun the installer' : 'bun run build:helper (needs the .NET SDK)'
+      );
   }
 
   if (existsSync(p.key) && existsSync(p.vault)) add('vault', 'ok', 'created');

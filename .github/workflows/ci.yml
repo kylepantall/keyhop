@@ -17,21 +17,42 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.3
+      - uses: actions/setup-dotnet@v4
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: 8.0.x
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      # macOS: the Touch ID helper. Windows: keyhop-hello.exe, which the tests run.
+      - run: bun run build:helper
       - run: bun test tests
-      - name: Build Touch ID helper
-        if: runner.os == 'macOS'
-        run: bun run build:helper
-      - name: Parse PowerShell scripts
+      - name: Parse the installer
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          foreach ($f in 'scripts/install.ps1', 'native/windows/keyhop-auth.ps1') {
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors) | Out-Null
-            if ($errors) { $errors; exit 1 }
-          }
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/install.ps1'), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+      - name: Build the Windows release
+        if: runner.os == 'Windows'
+        run: bun run build:windows
+      - name: Install the Windows release from dist
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:KEYHOP_RELEASE_DIR = (Resolve-Path dist).Path
+          & ([scriptblock]::Create((Get-Content -Raw scripts/install.ps1))) -NoSetup
+          $bin = Join-Path $env:LOCALAPPDATA 'keyhop\bin'
+          Get-ChildItem $bin | Format-Table Name, Length
+          $bad = Get-ChildItem $bin -Recurse -Include *.cmd, *.bat, *.ps1
+          if ($bad) { "Script files in the install: $bad"; exit 1 }
+          & (Join-Path $bin 'keyhop.exe') --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $checks = & (Join-Path $bin 'keyhop.exe') doctor --json | ConvertFrom-Json
+          $checks | Format-Table area, status, detail -AutoSize
+          if (($checks | Where-Object area -eq 'biometrics').status -ne 'ok') { 'keyhop.exe did not find keyhop-hello.exe'; exit 1 }
+          & (Join-Path $bin 'keyhop-hello.exe') selftest | Write-Output
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Install from this checkout
         if: runner.os == 'macOS'
         run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version

@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag matching package.json's version (git tag v0.4.0 && git push origin v0.4.0)
+# to build the Windows programs and publish them, with SHA256SUMS, as a GitHub Release.
+# scripts/install.ps1 and `keyhop update` on Windows install from these releases.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Tag matches package.json
+        shell: bash
+        run: |
+          version=$(bun -e "console.log(require('./package.json').version)")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then echo "Tag $GITHUB_REF_NAME but package.json has $version"; exit 1; fi
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build:helper
+      - run: bun test tests
+      - run: bun run build:windows
+      - name: Smoke-test the built programs
+        shell: powershell
+        run: |
+          & dist\keyhop.exe --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & dist\keyhop-hello.exe selftest | Write-Output
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## $version" '$0 == v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          cat >> notes.md <<'NOTES'
+
+          **Windows:** install or update with
+          ```powershell
+          & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.ps1)))
+          ```
+          The installer checks each program against `SHA256SUMS`. macOS installs from source with `install.sh`.
+          NOTES
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/keyhop.exe dist/keyhop-hello.exe dist/SHA256SUMS --title "keyhop $GITHUB_REF_NAME" --notes-file notes.md --verify-tag

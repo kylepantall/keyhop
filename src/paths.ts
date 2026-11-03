@@ -4,8 +4,26 @@ import { homedir } from 'node:os';
 import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Root of this checkout or install (holds src/, native/). */
-export const appRoot = fileURLToPath(new URL('..', import.meta.url));
+/**
+ * True inside a `bun build --compile` program (the Windows keyhop.exe), whose
+ * modules live in Bun's embedded file system ($bunfs, or B:/~BUN on Windows).
+ */
+export const isCompiled = isEmbeddedPath(import.meta.url);
+
+export function isEmbeddedPath(url: string): boolean {
+  return url.includes('$bunfs') || url.includes('~BUN');
+}
+
+/**
+ * Root of this checkout (holds src/, native/). Null in a compiled keyhop.exe,
+ * which carries no source tree: its helper sits next to it instead.
+ */
+export const appRoot: string | null = isCompiled ? null : fileURLToPath(new URL('..', import.meta.url));
+
+/** Folder holding keyhop's native helpers: next to keyhop.exe, or native/build in a checkout. */
+export function helperDir(): string {
+  return appRoot === null ? dirname(process.execPath) : join(appRoot, 'native', 'build');
+}
 
 export const REPO = process.env.KEYHOP_REPO ?? 'kylepantall/keyhop';
 
