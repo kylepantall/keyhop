@@ -4,6 +4,8 @@
 //   keyhop-hello create [--replace]         -> {"peer": b64}
 //   keyhop-hello derive <unlock|change|grant>  stdin {"peer"} -> b64 secret
 //   keyhop-hello ask                        $KEYHOP_ASK_MESSAGE -> deny | once | always
+//   keyhop-hello pipe <name>                stdin b64 value -> "ready", then serves
+//                                           \\.\pipe\<name> to the current user until killed
 //
 // create makes a Windows Hello key (TPM-backed where available) named "keyhop".
 // derive asks Windows Hello to sign the stored challenge; RSA PKCS#1 v1.5
@@ -15,6 +17,10 @@
 
 using System;
 using System.Drawing;
+using System.IO;
+using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
@@ -57,8 +63,13 @@ namespace Keyhop
                     case "ask":
                         Console.WriteLine(Ask(Environment.GetEnvironmentVariable("KEYHOP_ASK_MESSAGE") ?? ""));
                         return 0;
+                    case "pipe":
+                        if (args.Length < 2 || !Regex.IsMatch(args[1], "^keyhop-[0-9a-f]{32}$"))
+                            throw new ExitException("Usage: keyhop-hello pipe keyhop-<32 hex>");
+                        ServePipe(args[1], Convert.FromBase64String(Console.In.ReadToEnd().Trim()));
+                        return 0;
                     default:
-                        throw new ExitException("Usage: keyhop-hello probe | create [--replace] | derive <unlock|change|grant> | ask");
+                        throw new ExitException("Usage: keyhop-hello probe | create [--replace] | derive <unlock|change|grant> | ask | pipe <name>");
                 }
             }
             catch (ExitException error)
@@ -111,6 +122,48 @@ namespace Keyhop
             var signed = opened.Credential.RequestSignAsync(challenge.AsBuffer()).AsTask().GetAwaiter().GetResult();
             AssertStatus(signed.Status.ToString());
             return Convert.ToBase64String(signed.Result.ToArray());
+        }
+
+        /// <summary>
+        /// Serves the value to every client that opens the pipe, until the process is killed.
+        /// Only the current user may connect, and never over the network.
+        /// </summary>
+        private static void ServePipe(string name, byte[] value)
+        {
+            var security = new PipeSecurity();
+            security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User!, PipeAccessRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+            NamedPipeServerStream NewInstance() => new NamedPipeServerStream(name, PipeDirection.Out,
+                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.None, 0, value.Length, security);
+
+            var waiting = NewInstance();
+            Console.WriteLine("ready");
+            Console.Out.Flush();
+            while (true)
+            {
+                waiting.WaitForConnection();
+                var connected = waiting;
+                // Open the next instance first, so a second reader never finds the pipe missing.
+                waiting = NewInstance();
+                new System.Threading.Thread(() => Serve(connected, value)) { IsBackground = true }.Start();
+            }
+        }
+
+        private static void Serve(NamedPipeServerStream server, byte[] value)
+        {
+            using (server)
+            {
+                try
+                {
+                    server.Write(value, 0, value.Length);
+                    server.Flush();
+                    server.WaitForPipeDrain();
+                }
+                catch (IOException)
+                {
+                    // The reader went away early.
+                }
+            }
         }
 
         /// <summary>Deny is the default and the cancel button; closing or 2 minutes without an answer denies.</summary>

@@ -17,20 +17,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.3
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun test tests
-      - name: Build Touch ID helper
-        if: runner.os == 'macOS'
-        run: bun run build:helper
-      - name: Install from this checkout
-        if: runner.os == 'macOS'
-        run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version
-
       - uses: actions/setup-dotnet@v4
         if: runner.os == 'Windows'
         with:
           dotnet-version: 8.0.x
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # Touch ID helper on macOS, keyhop-hello.exe on Windows (the Windows pipe tests use it).
+      - run: bun run build:helper
+      - run: bun test tests
+      - name: Install from this checkout
+        if: runner.os == 'macOS'
+        run: KEYHOP_SOURCE_DIR="$PWD" bash scripts/install.sh --no-setup && ~/.local/bin/keyhop --version
+
       - name: Parse PowerShell scripts
         if: runner.os == 'Windows'
         shell: powershell

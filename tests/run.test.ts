@@ -12,6 +12,7 @@ import { changeAllowed, syncVault } from '../src/secrets.ts';
 import { createServer } from '../src/server.ts';
 import { AccessGate, describeRequest, type AccessRequest, type Decision } from '../src/approve.ts';
 import { VaultStore } from '../src/store.ts';
+import type { Delivery } from '../src/types.ts';
 import { fakeAuth, newStore, tempHome } from './support.ts';
 
 const unix = process.platform !== 'win32';
@@ -109,6 +110,74 @@ describe.if(unix)('run_with_secrets', () => {
   test('refuses a secret that does not allow the command', async () => {
     const { store, tool } = await setup();
     expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).rejects.toThrow(/keyhop allow TOKEN/);
+  });
+
+  describe('other ways to hand over a secret', () => {
+    async function withTool(script: string) {
+      const ctx = await setup();
+      const tool = join(ctx.p.dir, 'reader');
+      await writeFile(tool, `#!/bin/sh\n${script}\n`);
+      await chmod(tool, 0o755);
+      await changeAllowed(ctx.store, { TOKEN: { add: [tool] } });
+      return { ...ctx, tool };
+    }
+
+    test('{{file:NAME}} is a pipe that reads as the value, every time, and is gone afterwards', async () => {
+      const { store, tool } = await withTool('echo "path=$1 env=${TOKEN:-unset}"; cat "$1"; echo; cat "$1"');
+      const result = await runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain(SECRET);
+      expect(result.stdout.match(/\[REDACTED:TOKEN\]/g)).toHaveLength(2);
+      // Only the pipe was used: no environment variable.
+      expect(result.stdout).toContain('env=unset');
+      const path = /path=(\S+)/.exec(result.stdout)![1]!;
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test('{{file:NAME}} works inside a larger argument', async () => {
+      const { store, tool } = await withTool('echo "$1"');
+      const result = await runWithSecrets(store, { command: tool, args: ['ANTHROPIC_KEY=@{{file:TOKEN}}'] });
+      expect(result.stdout).toMatch(/^ANTHROPIC_KEY=@\//);
+    });
+
+    test('a program that never opens the pipe still finishes promptly', async () => {
+      const { store, tool } = await withTool('exit 0');
+      const started = Date.now();
+      await runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] });
+      expect(Date.now() - started).toBeLessThan(3_000);
+    });
+
+    test('stdin gets the value', async () => {
+      const { store, tool } = await withTool('cat');
+      const result = await runWithSecrets(store, { command: tool, args: [], stdin: 'TOKEN' });
+      expect(result.stdout).toBe('[REDACTED:TOKEN]');
+    });
+
+    test('{{arg:NAME}} needs the per-secret opt-in', async () => {
+      const { store, tool } = await withTool('echo "arg=$1"');
+      const request = { command: tool, args: ['{{arg:TOKEN}}'] };
+      expect(runWithSecrets(store, request)).rejects.toThrow(/allow-arg TOKEN/);
+      await changeAllowed(store, { TOKEN: { asArgument: true } });
+      expect((await runWithSecrets(store, request)).stdout).toContain('arg=[REDACTED:TOKEN]');
+      // Re-allowing a command keeps the opt-in; turning it off removes it.
+      await changeAllowed(store, { TOKEN: { add: [tool] } });
+      expect((await runWithSecrets(store, request)).exitCode).toBe(0);
+      await changeAllowed(store, { TOKEN: { asArgument: false } });
+      expect(runWithSecrets(store, request)).rejects.toThrow();
+    });
+
+    test('a pipe or stdin secret still needs the program allowed', async () => {
+      const { store } = await setup();
+      expect(runWithSecrets(store, { command: '/usr/bin/true', args: ['{{file:TOKEN}}'] })).rejects.toThrow(/keyhop allow TOKEN/);
+      expect(runWithSecrets(store, { command: '/usr/bin/true', args: [], stdin: 'TOKEN' })).rejects.toThrow(/keyhop allow TOKEN/);
+    });
+
+    test('the dialog shows how each secret is handed over', () => {
+      const describe = (delivery: Delivery[]) =>
+        describeRequest({ secrets: ['T'], delivery: { T: delivery }, executable: '/x', args: [], cwd: '/' });
+      const texts = new Set([describe(['env']), describe(['file']), describe(['arg']), describe(['stdin'])]);
+      expect(texts.size).toBe(4);
+    });
   });
 
   describe('asking the user', () => {

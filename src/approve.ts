@@ -7,11 +7,14 @@
 
 import { windowsHelperPath } from './auth.ts';
 import { runProcess } from './process.ts';
+import type { Delivery } from './types.ts';
 
 export type Decision = 'deny' | 'once' | 'always';
 
 export interface AccessRequest {
   secrets: string[];
+  /** How each secret would reach the program. */
+  delivery?: Record<string, Delivery[]>;
   /** Resolved real path of the program. */
   executable: string;
   args: string[];
@@ -19,6 +22,13 @@ export interface AccessRequest {
 }
 
 export type Approver = (request: AccessRequest) => Promise<Decision>;
+
+const DELIVERY_LABEL: Record<Delivery, string> = {
+  env: 'environment variable',
+  stdin: 'standard input',
+  file: 'file (named pipe)',
+  arg: 'argument, visible in the process list',
+};
 
 const MAX_ARGS_CHARS = 600;
 const MAX_PATH_CHARS = 300;
@@ -47,7 +57,9 @@ export function describeRequest(request: AccessRequest): string {
   const lines = [
     'Claude wants to run a command with secrets it is not allowed to use:',
     '',
-    `Secrets:  ${request.secrets.join(', ')}`,
+    `Secrets:  ${request.secrets
+      .map((name) => (request.delivery?.[name]?.length ? `${name} (as ${request.delivery[name]!.map((d) => DELIVERY_LABEL[d]).join(', ')})` : name))
+      .join(', ')}`,
     `Program:  "${inert(request.executable, MAX_PATH_CHARS)}"`,
     `Arguments:  ${args || '(none)'}`,
     `Folder:  "${inert(request.cwd, MAX_PATH_CHARS)}"`,

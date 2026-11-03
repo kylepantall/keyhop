@@ -72,6 +72,11 @@ export interface SecretPolicy {
    * config.json or sync.d can't route another item into an allowed name.
    */
   boundTo?: string;
+  /**
+   * May be placed into a command-line argument ({{arg:NAME}}), where it shows
+   * in the process list while the program runs. Off unless the user opts in.
+   */
+  asArgument?: boolean;
 }
 
 /**
@@ -137,6 +142,9 @@ export interface StepResult {
   step: string;
   count: number;
 }
+
+/** How run_with_secrets hands a secret to a program. */
+export type Delivery = 'env' | 'stdin' | 'file' | 'arg';
 
 /** Sync progress for a spinner; messages never contain secret values. */
 export type Progress = (message: string) => void;

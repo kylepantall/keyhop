@@ -25,6 +25,8 @@ Usage: keyhop <command>
   remove NAME                   Unlink a secret and delete it from the vault
   allow NAME COMMAND...         Let COMMAND (gh, /usr/local/bin/aws …) receive NAME
   deny NAME COMMAND...          Take that back
+  allow-arg NAME / deny-arg NAME
+                                Let NAME be placed in an argument ({{arg:NAME}}); it shows in the process list
   doctor [--json]               Check biometrics, vault, tools, scripts and Claude Code
   update [--check] [--ref R]    Install the latest version from GitHub
   serve                         Run the MCP server (stdio); Claude Code starts this
@@ -92,7 +94,10 @@ async function main(argv: string[]): Promise<number> {
       const { syncedAt, secrets } = await summarize(store());
       console.log(`Last sync: ${syncedAt ?? 'never'}`);
       for (const s of secrets)
-        console.log(`  ${s.name}  (${s.source})  ${s.allowedCommands.length ? s.allowedCommands.join(', ') : 'no commands allowed'}`);
+        console.log(
+          `  ${s.name}  (${s.source})  ${s.allowedCommands.length ? s.allowedCommands.join(', ') : 'no commands allowed'}` +
+            (s.asArgument ? '  [may be an argument]' : '')
+        );
       return 0;
     }
     case 'add': {
@@ -131,6 +136,18 @@ async function main(argv: string[]): Promise<number> {
       const resolved = command === 'allow' ? resolveAllowed(commands) : commands.map((c) => (Bun.which(c) ?? c));
       const result = await changeAllowed(store(), { [name]: command === 'allow' ? { add: resolved } : { remove: resolved } });
       console.log(`${name} may be used with: ${result[name]!.join(', ') || 'nothing'}`);
+      return 0;
+    }
+    case 'allow-arg':
+    case 'deny-arg': {
+      const [name] = args;
+      if (!name || args.length > 1) throw new Error(`Usage: keyhop ${command} NAME`);
+      await changeAllowed(store(), { [name]: { asArgument: command === 'allow-arg' } });
+      console.log(
+        command === 'allow-arg'
+          ? `${name} may now be placed in an argument ({{arg:${name}}}) for its allowed commands. It shows in the process list while they run.`
+          : `${name} may no longer be placed in an argument.`
+      );
       return 0;
     }
     default:

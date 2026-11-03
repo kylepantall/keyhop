@@ -69,6 +69,8 @@ export interface AllowChange {
   bindTo?: string;
   /** Delete the secret and its rules. */
   drop?: boolean;
+  /** Turn {{arg:NAME}} (value in a command-line argument) on or off. */
+  asArgument?: boolean;
 }
 
 /** Adds or removes executables a secret may be injected into. Always prompts. */
@@ -93,11 +95,13 @@ export async function changeAllowed(
         continue;
       }
       const origin = change.bindTo ?? vault.secrets[name]?.origin;
-      if (change.add?.length && !origin)
+      if ((change.add?.length || change.asArgument) && !origin)
         throw new Error(`${name} has not been synced yet. Link it with keyhop add, or run keyhop sync first.`);
       const current = vault.policy[name];
       // Rules granted for another origin don't carry over.
-      const kept = current && current.boundTo === origin ? current.allow : [];
+      const sameOrigin = !!current && current.boundTo === origin;
+      const kept = sameOrigin ? current.allow : [];
+      const asArgument = change.asArgument ?? (sameOrigin && current.asArgument === true);
       const removing = new Set(change.remove ?? []);
       const adding = (change.add ?? []).map((entry) => pinned.get(typeof entry === 'string' ? entry : entry.path)!);
       const allow = kept.filter(
@@ -105,7 +109,7 @@ export async function changeAllowed(
       );
       allow.push(...adding);
       allow.sort((a, b) => a.path.localeCompare(b.path));
-      vault.policy[name] = { allow, boundTo: origin };
+      vault.policy[name] = { allow, boundTo: origin, ...(asArgument ? { asArgument: true } : {}) };
       result[name] = allow.map((e) => e.path);
     }
     return result;
@@ -117,6 +121,8 @@ export interface SecretSummary {
   source: string;
   updatedAt: string;
   allowedCommands: string[];
+  /** May be placed in an argument with {{arg:NAME}}. */
+  asArgument: boolean;
   description?: string;
 }
 
@@ -129,11 +135,13 @@ export async function summarize(store: VaultStore): Promise<{ syncedAt: string |
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, entry]) => {
         const policy = vault.policy[name];
+        const bound = policy?.boundTo === entry.origin ? policy : undefined;
         return {
           name,
           source: entry.source,
           updatedAt: entry.updatedAt,
-          allowedCommands: policy?.boundTo === entry.origin ? policy.allow.map((e) => e.path) : [],
+          allowedCommands: bound?.allow.map((e) => e.path) ?? [],
+          asArgument: bound?.asArgument === true,
           description: config.secrets?.[name]?.description,
         };
       }),
