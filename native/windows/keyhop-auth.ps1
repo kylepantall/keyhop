@@ -23,12 +23,8 @@ function Fail([string]$Message, [int]$Code = 1) {
 }
 
 try {
-  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  . (Join-Path $PSScriptRoot 'keyhop-buffers.ps1')
   $null = [Windows.Security.Credentials.KeyCredentialManager, Windows.Security.Credentials, ContentType = WindowsRuntime]
-  $null = [Windows.Storage.Streams.IBuffer, Windows.Storage.Streams, ContentType = WindowsRuntime]
-  # WinRT's own buffer conversions: PowerShell 5.1 can't pick the .NET
-  # WindowsRuntimeBufferExtensions.ToArray overload for a projected IBuffer.
-  $cryptoBuffer = [Windows.Security.Cryptography.CryptographicBuffer, Windows.Security.Cryptography, ContentType = WindowsRuntime]
   $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
     $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and
     $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'
@@ -67,12 +63,12 @@ try {
     'derive' {
       $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
       if (-not $request.peer) { Fail 'Input needs peer.' }
-      $buffer = $cryptoBuffer::DecodeFromBase64String([string]$request.peer)
+      $buffer = ConvertTo-WinRtBuffer ([Convert]::FromBase64String($request.peer))
       $opened = Wait-Operation ($manager::OpenAsync($name)) $retrieval
       Assert-Status $opened.Status
       $signed = Wait-Operation ($opened.Credential.RequestSignAsync($buffer)) ([Windows.Security.Credentials.KeyCredentialOperationResult])
       Assert-Status $signed.Status
-      $cryptoBuffer::EncodeToBase64String($signed.Result)
+      [Convert]::ToBase64String((ConvertFrom-WinRtBuffer $signed.Result))
     }
     default { Fail 'Usage: keyhop-auth.ps1 create | derive <unlock|change|grant>' }
   }
