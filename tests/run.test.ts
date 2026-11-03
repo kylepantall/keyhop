@@ -4,6 +4,7 @@ import { chmod, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { assertName } from '../src/config.ts';
 import { assertAllowable, findAllowed, resolveExecutable } from '../src/policy.ts';
 import { redactor } from '../src/redact.ts';
 import { runWithSecrets } from '../src/run.ts';
@@ -35,6 +36,26 @@ describe('policy', () => {
     for (const name of ['/bin/bash', '/usr/bin/env', '/usr/local/bin/node', 'C:\\Windows\\System32\\cmd.exe'])
       expect(() => assertAllowable(name)).toThrow();
     expect(() => assertAllowable('/opt/homebrew/bin/gh')).not.toThrow();
+  });
+
+  test("refuses keyhop's own runtime, by name or under another name", async () => {
+    expect(() => assertAllowable('C:\\Users\\me\\AppData\\Local\\keyhop\\app\\keyhop.exe')).toThrow();
+    expect(() => assertAllowable(process.execPath)).toThrow();
+    if (process.platform === 'win32') return;
+    const home = await tempHome();
+    try {
+      await mkdir(home.p.dir, { recursive: true });
+      const alias = join(home.p.dir, 'harmless');
+      await symlink(process.execPath, alias);
+      expect(() => assertAllowable(alias)).toThrow();
+    } finally {
+      await home.cleanup();
+    }
+  });
+
+  test('BUN_ variables are never secret names', () => {
+    expect(() => assertName('BUN_BE_BUN')).toThrow();
+    expect(() => assertName('BUN_CONFIG_REGISTRY')).toThrow();
   });
 
   test('rejects relative paths', () => {

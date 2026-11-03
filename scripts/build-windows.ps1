@@ -16,7 +16,9 @@ try {
   Get-ChildItem (Join-Path $stage 'native\build') | Where-Object { $_.Extension -notin '.exe', '.dll', '.config' } | Remove-Item -Force
 
   # KEYHOP_COMPILED tells src/paths.ts to find native/ and examples/ beside keyhop.exe.
-  bun build --compile --minify --target=bun-windows-x64-baseline --define KEYHOP_COMPILED=true src/index.ts --outfile (Join-Path $stage 'keyhop.exe')
+  # Never load bunfig.toml or .env from the working directory (often a project Claude can write to).
+  bun build --compile --minify --target=bun-windows-x64-baseline --define KEYHOP_COMPILED=true `
+    --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/index.ts --outfile (Join-Path $stage 'keyhop.exe')
   if ($LASTEXITCODE -ne 0) { throw 'Compiling keyhop.exe failed.' }
   Copy-Item -Recurse examples/sync.d (Join-Path $stage 'examples\sync.d')
   Copy-Item LICENSE, README.md $stage

@@ -65,6 +65,15 @@ jobs:
           $out = & "$app/keyhop.exe" (Join-Path $env:RUNNER_TEMP 'probe.mjs')
           Remove-Item Env:BUN_BE_BUN
           if ("$out" -ne 'mjs-ok') { throw "BUN_BE_BUN did not run the script: $out" }
+          # A bunfig.toml preload or .env planted in the working folder must not load.
+          $trap = Join-Path $env:RUNNER_TEMP 'trap'
+          New-Item -ItemType Directory -Force $trap | Out-Null
+          Set-Content (Join-Path $trap 'pwned.js') "require('fs').writeFileSync('$($trap -replace '\\','/')/pwned.txt', 'x')"
+          Set-Content (Join-Path $trap 'bunfig.toml') 'preload = ["./pwned.js"]'
+          Set-Content (Join-Path $trap '.env') 'KEYHOP_REPO=attacker/repo'
+          Push-Location $trap
+          try { & "$app/keyhop.exe" --version | Out-Null } finally { Pop-Location }
+          if (Test-Path (Join-Path $trap 'pwned.txt')) { throw 'keyhop.exe loaded bunfig.toml from the working folder' }
       - name: Install the built release
         if: runner.os == 'Windows'
         shell: powershell

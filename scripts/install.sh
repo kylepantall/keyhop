@@ -146,6 +146,10 @@ main() {
   {
     printf '#!/usr/bin/env bash\n'
     printf 'export KEYHOP_LAUNCHER=%q\n' "$bin_dir/keyhop"
+    # Bun reads bunfig.toml (preload) and .env from its working directory, which
+    # is often a project Claude can write to. Start in the app folder instead.
+    printf 'export KEYHOP_CWD="$PWD"\n'
+    printf 'cd %q || exit 1\n' "$install_dir/app"
     printf 'exec %q %q "$@"\n' "$bun_bin" "$install_dir/app/src/index.ts"
   } >"$launcher"
   chmod +x "$launcher"

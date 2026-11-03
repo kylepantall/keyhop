@@ -12,6 +12,8 @@ import { appRoot, REPO, windowsSystem } from './paths.ts';
 import { runProcess } from './process.ts';
 
 export const WINDOWS_ASSET = 'keyhop-windows-x64.zip';
+/** Written by install.ps1 into the app folder. */
+export const INSTALL_MARKER = '.keyhop-install';
 
 export function releaseUrl(version: string, file: string): string {
   return `https://github.com/${REPO}/releases/download/v${version}/${file}`;
@@ -49,6 +51,10 @@ async function listFiles(dir: string): Promise<string[]> {
  * failure puts the old files back.
  */
 export async function installWindowsRelease(version: string): Promise<void> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Unexpected version on GitHub: ${version}`);
+  // Only an install the installer made: never rewrite a folder keyhop.exe was merely copied into.
+  if (!existsSync(join(appRoot, INSTALL_MARKER)))
+    throw new Error('This keyhop.exe was not installed by the installer; reinstall it with install.ps1.');
   const sums = (await download(releaseUrl(version, 'SHA256SUMS'))).toString('utf8');
   const expected = expectedSum(sums, WINDOWS_ASSET);
   if (!expected) throw new Error(`SHA256SUMS for v${version} does not list ${WINDOWS_ASSET}.`);
@@ -68,25 +74,28 @@ export async function installWindowsRelease(version: string): Promise<void> {
     if (tar.code !== 0) throw new Error(`Could not unpack the release: ${tar.stderr.trim()}`);
     if (!existsSync(join(unpacked, 'keyhop.exe'))) throw new Error('The release is missing keyhop.exe.');
 
-    // Leftovers from the previous update are no longer running.
+    // Leftovers from earlier updates; one may still be running (an older MCP server), so skip those.
     for (const old of (await listFiles(appRoot)).filter((f) => f.endsWith('.old') && !f.startsWith(staging)))
-      await rm(old, { force: true });
+      await rm(old, { force: true }).catch(() => undefined);
 
-    const moved: string[] = [];
+    const moved: { target: string; aside: string }[] = [];
     try {
       for (const source of await listFiles(unpacked)) {
         const target = join(appRoot, relative(unpacked, source));
         await mkdir(dirname(target), { recursive: true });
         if (existsSync(target)) {
-          await rename(target, `${target}.old`);
-          moved.push(target);
+          // A .old still running from an earlier update can't be replaced; use a fresh name.
+          await rm(`${target}.old`, { force: true }).catch(() => undefined);
+          const aside = existsSync(`${target}.old`) ? `${target}.${Date.now()}.old` : `${target}.old`;
+          await rename(target, aside);
+          moved.push({ target, aside });
         }
         await rename(source, target);
       }
     } catch (error) {
-      for (const target of moved.reverse()) {
+      for (const { target, aside } of moved.reverse()) {
         await rm(target, { force: true }).catch(() => undefined);
-        await rename(`${target}.old`, target).catch(() => undefined);
+        await rename(aside, target).catch(() => undefined);
       }
       throw error;
     }

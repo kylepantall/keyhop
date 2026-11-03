@@ -6,7 +6,7 @@ import type { Config } from './types.ts';
 export const NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 /** Variables that change how programs load or where they look, so never secret names. */
-const RESERVED = /^(PATH|PATHEXT|HOME|USER|USERNAME|SHELL|TMPDIR|TEMP|TMP|PWD|COMSPEC|SYSTEMROOT|WINDIR|APPDATA|LOCALAPPDATA|USERPROFILE|NODE_OPTIONS|BUN_OPTIONS|KEYHOP_.*|DYLD_.*|LD_.*)$/;
+const RESERVED = /^(PATH|PATHEXT|HOME|USER|USERNAME|SHELL|TMPDIR|TEMP|TMP|PWD|COMSPEC|SYSTEMROOT|WINDIR|APPDATA|LOCALAPPDATA|USERPROFILE|NODE_OPTIONS|BUN_.*|KEYHOP_.*|DYLD_.*|LD_.*)$/;
 
 export function assertName(name: string): void {
   if (!NAME_PATTERN.test(name))

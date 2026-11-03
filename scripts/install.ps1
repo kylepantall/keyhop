@@ -11,7 +11,9 @@ param(
   [string]$Version = 'latest',
   [switch]$Claude,
   [switch]$NoSetup,
-  [switch]$Help
+  [switch]$Help,
+  # Accepted for keyhop 0.3.x, whose "keyhop update" runs this script with -Ref; releases ignore it.
+  [string]$Ref
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -63,13 +65,19 @@ function Install-Keyhop {
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
     Expand-Archive $zip -DestinationPath $staging -Force
     if (-not (Test-Path (Join-Path $staging 'keyhop.exe'))) { throw 'The release is missing keyhop.exe.' }
+    # Marks a folder the installer owns; "keyhop update" refuses to rewrite any other.
+    Set-Content -LiteralPath (Join-Path $staging '.keyhop-install') -Value 'keyhop' -Encoding ASCII
     $old = Join-Path $installDir 'app.old'
     if (Test-Path $old) { Remove-Item $old -Recurse -Force }
     if (Test-Path $app) {
       try { Move-Item $app $old }
       catch { throw 'keyhop is running (Claude Code starts it). Quit Claude Code, then rerun the installer.' }
     }
-    Move-Item $staging $app
+    try { Move-Item $staging $app }
+    catch {
+      if (Test-Path $old) { Move-Item $old $app }
+      throw "Could not move the new version into place: $($_.Exception.Message)"
+    }
     if (Test-Path $old) { Remove-Item $old -Recurse -Force -ErrorAction SilentlyContinue }
     $exe = Join-Path $app 'keyhop.exe'
     Write-Info "$exe (version $((& $exe --version 2>&1 | ForEach-Object { "$_" }) -join ' '))"
@@ -80,13 +88,30 @@ function Install-Keyhop {
       if (Test-Path $leftover) { Remove-Item $leftover -Recurse -Force -ErrorAction SilentlyContinue }
     }
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $entries = @(($userPath -split ';') | Where-Object { $_ -and $_ -ne $oldBin })
-    if ($entries -notcontains $app) {
-      $entries += $app
+    $entries = @(($userPath -split ';') | Where-Object { $_ })
+    $wanted = @($entries | Where-Object { $_ -ne $oldBin })
+    if ($wanted -notcontains $app) { $wanted += $app }
+    # Only write when something changed: writing flattens %VAR% entries.
+    if (($wanted -join ';') -ne ($entries -join ';')) {
+      [Environment]::SetEnvironmentVariable('Path', ($wanted -join ';'), 'User')
       $env:Path = "$env:Path;$app"
       Write-Info "Added $app to your user PATH (new terminals pick it up)."
     }
-    [Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')
+
+    # keyhop 0.3.x registered "cmd /c ...\bin\keyhop.cmd serve", which is gone now.
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+      $previous = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        $registered = (& claude mcp get keyhop 2>&1 | ForEach-Object { "$_" }) -join "`n"
+        if ($LASTEXITCODE -eq 0 -and $registered -match 'keyhop\.cmd') {
+          & claude mcp remove keyhop --scope user 2>&1 | Out-Null
+          & claude mcp add --transport stdio --scope user keyhop -- $exe serve 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) { Write-Info 'Updated the Claude Code registration to keyhop.exe.' }
+          else { Write-Info "Re-register keyhop with: claude mcp add --transport stdio --scope user keyhop -- `"$exe`" serve" }
+        }
+      } finally { $ErrorActionPreference = $previous }
+    }
 
     if ($Claude) {
       Write-Step 'Registering with Claude Code'
