@@ -14,14 +14,14 @@ describe.if(process.platform === 'win32')('Windows secret pipe', () => {
     const pipe = await openWindowsPipe('pipe-value-1');
     try {
       // This test process is not the attached program, so it is turned away.
-      const stranger = readFile(pipe.path, 'utf8');
+      const stranger = readFile(pipe.path, 'utf8').catch(() => '');
       const reader = await runProcess(
         windowsSystem('powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-Command', `[IO.File]::ReadAllText('${pipe.path}')`],
         { timeoutMs: 30_000, onSpawn: (pid) => pipe.attach(pid) }
       );
       expect(reader.stdout.trim()).toBe('pipe-value-1');
-      expect(await stranger.catch(() => '')).not.toBe('pipe-value-1');
+      expect(await stranger).not.toBe('pipe-value-1');
     } finally {
       await pipe.close();
     }
