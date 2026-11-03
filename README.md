@@ -18,6 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/ins
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.ps1)))
 ```
 
+On Windows this installs the latest [release](https://github.com/kylepantall/keyhop/releases): `keyhop.exe` plus `keyhop-hello.exe` (the Windows Hello helper), checked against the release's `SHA256SUMS`. No PowerShell runs after install. You can also download `keyhop-windows-x64.zip` yourself, unzip it, and run `keyhop.exe setup`.
+
 On a first install the installer starts `keyhop setup`, which:
 
 1. creates the vault (one Touch ID / Hello prompt)
@@ -29,7 +31,7 @@ On a first install the installer starts `keyhop setup`, which:
 |---|---|---|
 | Register with Claude Code, no prompt | `bash -s -- --claude` | `-Claude` |
 | Skip the setup wizard | `--no-setup` | `-NoSetup` |
-| Install a branch or tag | `bash -s -- v0.2.0` | `-Ref v0.2.0` |
+| Install a branch, tag or version | `bash -s -- v0.2.0` | `-Version 0.4.0` (releases only) |
 
 ## Commands
 
@@ -125,5 +127,7 @@ Shells and interpreters are still refused without asking, and only one request c
 ```bash
 bun install && bun run build:helper && bun test && bun run typecheck
 ```
+
+`build:helper` uses `swiftc` on macOS and the .NET SDK on Windows. `scripts/build-windows.ps1` builds the Windows release zip. To release, bump `package.json`, then push a `vX.Y.Z` tag; `.github/workflows/release.yml` builds and publishes it.
 
 Data lives in `~/.config/keyhop` (macOS) or `%APPDATA%\keyhop`; override with `KEYHOP_HOME`. MIT licensed.
