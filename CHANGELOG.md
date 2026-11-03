@@ -5,6 +5,7 @@
 - Windows: `keyhop-hello.exe` no longer flashes a console window during Windows Hello prompts or the access dialog.
 - Windows: `keyhop-hello selftest` checks the WinRT plumbing without a prompt; CI and releases run it and fail if any `.cmd`, `.bat`, `.ps1` or `.vbs` ships.
 - Release notes now come from this changelog.
+- The starter sync scripts are built into keyhop, so the Windows release ships no loose `.ps1`/`.sh` files.
 
 ## 0.6.0
 
