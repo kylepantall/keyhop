@@ -27,6 +27,8 @@ describe('compiled keyhop.exe', () => {
   test('recognises Bun embedded paths on every OS', () => {
     expect(isEmbeddedPath('file:///$bunfs/root/keyhop')).toBe(true);
     expect(isEmbeddedPath('file:///B:/~BUN/root/keyhop.exe')).toBe(true);
+    expect(isEmbeddedPath('B:\\~BUN\\root\\keyhop.exe')).toBe(true);
+    expect(isEmbeddedPath('C:\\Users\\RUNNER~1\\keyhop\\src\\paths.ts')).toBe(false);
     expect(isEmbeddedPath('file:///C:/Users/me/keyhop/src/paths.ts')).toBe(false);
   });
 

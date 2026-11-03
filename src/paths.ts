@@ -8,10 +8,11 @@ import { fileURLToPath } from 'node:url';
  * True inside a `bun build --compile` program (the Windows keyhop.exe), whose
  * modules live in Bun's embedded file system ($bunfs, or B:/~BUN on Windows).
  */
-export const isCompiled = isEmbeddedPath(import.meta.url);
+// import.meta.path is a plain path; the URL can arrive percent-encoded (%7EBUN on Windows).
+export const isCompiled = isEmbeddedPath(import.meta.path) || isEmbeddedPath(decodeURIComponent(import.meta.url));
 
-export function isEmbeddedPath(url: string): boolean {
-  return url.includes('$bunfs') || url.includes('~BUN');
+export function isEmbeddedPath(path: string): boolean {
+  return path.includes('$bunfs') || /[\\/]~BUN[\\/]/.test(path);
 }
 
 /**
