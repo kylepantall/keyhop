@@ -15,7 +15,8 @@ try {
   # Only the exe and what it loads; no PDBs or build leftovers.
   Get-ChildItem (Join-Path $stage 'native\build') | Where-Object { $_.Extension -notin '.exe', '.dll', '.config' } | Remove-Item -Force
 
-  bun build --compile --minify --target=bun-windows-x64-baseline src/index.ts --outfile (Join-Path $stage 'keyhop.exe')
+  # KEYHOP_COMPILED tells src/paths.ts to find native/ and examples/ beside keyhop.exe.
+  bun build --compile --minify --target=bun-windows-x64-baseline --define KEYHOP_COMPILED=true src/index.ts --outfile (Join-Path $stage 'keyhop.exe')
   if ($LASTEXITCODE -ne 0) { throw 'Compiling keyhop.exe failed.' }
   Copy-Item -Recurse examples/sync.d (Join-Path $stage 'examples\sync.d')
   Copy-Item LICENSE, README.md $stage

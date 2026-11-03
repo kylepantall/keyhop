@@ -4,11 +4,14 @@ import { homedir } from 'node:os';
 import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** Replaced with `true` by `bun build --define` (scripts/build-windows.ps1); never set at runtime. */
+declare const KEYHOP_COMPILED: boolean | undefined;
+
 /**
- * True inside a `bun build --compile` executable (the Windows release), whose
- * sources live in Bun's virtual file system rather than on disk.
+ * True inside the compiled release executable (keyhop.exe), whose sources
+ * live in Bun's virtual file system rather than on disk.
  */
-export const compiled = /\$bunfs|~BUN/.test(import.meta.url);
+export const compiled = typeof KEYHOP_COMPILED !== 'undefined' && KEYHOP_COMPILED === true;
 
 /**
  * Root of this checkout or install (holds native/, examples/). For the
