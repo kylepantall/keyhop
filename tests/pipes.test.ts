@@ -4,7 +4,6 @@ import { readFile } from 'node:fs/promises';
 import { windowsHelperPath } from '../src/auth.ts';
 import { openWindowsPipe } from '../src/pipes.ts';
 import { runProcess } from '../src/process.ts';
-import { windowsSystem } from '../src/paths.ts';
 
 // macOS/Linux use inherited /dev/fd pipes, covered end to end in run.test.ts.
 // On Windows keyhop-hello.exe serves the pipe; CI builds it before the tests.
@@ -15,8 +14,11 @@ describe.if(process.platform === 'win32')('Windows secret pipe', () => {
     try {
       // This test process is not the attached program, so it is turned away.
       const stranger = readFile(pipe.path, 'utf8').catch(() => '');
+      // PowerShell 7 (.NET Core): Windows PowerShell 5.1's .NET Framework refuses \\.\ paths.
+      const pwsh = Bun.which('pwsh');
+      expect(pwsh).toBeTruthy();
       const reader = await runProcess(
-        windowsSystem('powershell.exe'),
+        pwsh!,
         ['-NoProfile', '-NonInteractive', '-Command', `[IO.File]::ReadAllText('${pipe.path}')`],
         { timeoutMs: 30_000, onSpawn: (pid) => pipe.attach(pid) }
       );
