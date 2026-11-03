@@ -83,10 +83,21 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 
 | Tool | Returns |
 |---|---|
-| `list_secrets` | Names, sources, allowed command paths |
+| `list_secrets` | Names, sources, allowed programs and how each may receive the secret |
 | `run_with_secrets` | Exit code + redacted stdout/stderr |
 | `sync_secrets` | Steps run and counts |
 | `lock_vault` | Forgets the key until the next prompt |
+
+### Four ways to hand a program a secret
+
+| Way | Claude asks with | What the program sees |
+|---|---|---|
+| env | `secrets: ["NAME"]` | An environment variable |
+| stdin | `stdin: "NAME"` | The value on standard input, then end of input (`gh secret set`, `wrangler secret put`, `docker login --password-stdin`) |
+| file | `{{file:NAME}}` in any argument, e.g. `ANTHROPIC_KEY=@{{file:ANTHROPIC_KEY}}` | A path that reads as the value, **once**. macOS: an inherited pipe (`/dev/fd/3`) no other process can open. Windows: an owner-only named pipe served only to that program. Never written to disk. |
+| arg | `{{arg:NAME}}` | The value itself in the argument. ⚠️ Shows in the process list while it runs. |
+
+Each program is allowed per way: `keyhop allow NAME gh` means env only, and `keyhop allow NAME infisical --as file` adds the file way. A program trusted with an environment variable might still upload a file it's handed (`gh gist create`, `curl -d @file`), so the ways are granted separately. The access dialog can grant env, stdin and file. `arg` can only be granted in your terminal.
 
 ### When a secret isn't allowed
 
@@ -120,6 +131,7 @@ Shells and interpreters are still refused without asking, and only one request c
 | Endpoint flags | `--registry`, `--hostname`, `--endpoint-url` can send a token elsewhere |
 | Tools that run code | git hooks, `npm run`, `make`: only allow tools you'd trust with the key |
 | Prompts can be triggered by any process running as you | Don't approve a Touch ID / Hello prompt you didn't expect. Windows Hello shows the same prompt for unlocks and rule changes |
+| A process running as you can read a running program's environment | On macOS, `ps eww` (so Claude's own shell) can see an env secret while the program runs. Prefer stdin or file for long-running programs |
 | Programs in folders you can write to | A file swapped between keyhop's hash check and launch runs with the secret. Be wary of allowing programs Claude could have written |
 | The install folder is yours to write | A process running as you could patch keyhop itself, then wait for your next unlock |
 

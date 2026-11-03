@@ -1,13 +1,13 @@
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { AccessGate } from './approve.ts';
-import { openSecretPipe, type SecretPipe } from './pipes.ts';
+import { openWindowsPipe, type SecretPipe } from './pipes.ts';
 import { assertAllowable, findAllowed, pinExecutable, resolveExecutable, verifyPinned } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
 import type { VaultStore } from './store.ts';
 import { changeAllowed, syncedSecrets } from './secrets.ts';
-import type { Delivery, VaultData } from './types.ts';
+import { allowedModes, type Delivery, type VaultData } from './types.ts';
 
 export interface RunOptions {
   /** Asks the user about secrets not allowed for the program; without it they are refused. */
@@ -75,20 +75,28 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   const vault = await store.read();
   const missing = names.filter((name) => !vault.secrets[name]);
   if (missing.length) throw new Error(`Unknown secret(s): ${missing.join(', ')}. Call list_secrets.`);
-  // A value in an argument shows in the process list, so it needs its own opt-in.
-  const noArg = names.filter((name) => uses.get(name)!.has('arg') && !boundPolicy(vault, name)?.asArgument);
+  // A grant covers the program and the ways it may receive the secret: trusting
+  // gh with GH_TOKEN in its environment doesn't let Claude hand gh the token as
+  // a file to upload (gh gist create {{file:GH_TOKEN}}).
+  const grants = names.map((name) => {
+    const entry = findAllowed(boundPolicy(vault, name), path);
+    const covered = !!entry && [...uses.get(name)!].every((mode) => allowedModes(entry).includes(mode));
+    return { name, allowed: covered ? entry : undefined };
+  });
+  const allowCommand = (name: string) =>
+    `keyhop allow ${name} ${request.command}` +
+    ([...uses.get(name)!].some((mode) => mode !== 'env') ? ` --as ${[...uses.get(name)!].join(',')}` : '');
+  // A value in an argument shows in the process list; only the CLI can grant that, never the dialog.
+  const noArg = grants.filter((g) => !g.allowed && uses.get(g.name)!.has('arg')).map((g) => g.name);
   if (noArg.length)
     throw new Error(
-      `${noArg.join(', ')} may not be placed in an argument (it would show in the process list). ` +
-        `Use {{file:NAME}} or stdin instead, or the user can opt in with: ` +
-        noArg.map((name) => `keyhop allow-arg ${name}`).join(' && ')
+      `${noArg.join(', ')} may not be placed in an argument for ${path} (it would show in the process list). ` +
+        `Use {{file:NAME}} or stdin instead, or the user can allow it with: ` +
+        noArg.map(allowCommand).join(' && ')
     );
-  const grants = names.map((name) => ({ name, allowed: findAllowed(boundPolicy(vault, name), path) }));
   const denied = grants.filter((g) => !g.allowed).map((g) => g.name);
   if (denied.length) {
-    const hint =
-      `Only the user can allow it, by running: ` +
-      denied.map((name) => `keyhop allow ${name} ${request.command}`).join(' && ');
+    const hint = `Only the user can allow it, by running: ` + denied.map(allowCommand).join(' && ');
     if (!options.gate) throw new Error(`${denied.join(', ')} may not be used with ${path}. ${hint}`);
     // Pin now, so the file the user approves is the file that runs.
     const pinned = await pinExecutable(path);
@@ -109,7 +117,9 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
     if (outcome === 'always')
       await changeAllowed(
         store,
-        Object.fromEntries(denied.map((name) => [name, { add: [pinned], bindTo: vault.secrets[name]!.origin }]))
+        Object.fromEntries(
+          denied.map((name) => [name, { add: [pinned], as: [...uses.get(name)!], bindTo: vault.secrets[name]!.origin }])
+        )
       );
     for (const grant of grants) grant.allowed ??= pinned;
   }
@@ -122,12 +132,21 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   for (const name of Object.keys(all)) delete env[name];
   for (const name of request.secrets ?? []) env[name] = all[name];
 
+  // {{file:NAME}}: macOS/Linux pass an inherited pipe (/dev/fd/3 …) no other
+  // process can open; Windows serves a named pipe only to this program's tree.
+  const fileNames = names.filter((name) => uses.get(name)!.has('file'));
   const pipes = new Map<string, SecretPipe>();
   try {
-    for (const name of names)
-      if (uses.get(name)!.has('file')) pipes.set(name, await openSecretPipe(all[name]!));
+    const filePaths = new Map<string, string>();
+    if (process.platform === 'win32') {
+      for (const name of fileNames) {
+        const pipe = await openWindowsPipe(all[name]!);
+        pipes.set(name, pipe);
+        filePaths.set(name, pipe.path);
+      }
+    } else fileNames.forEach((name, i) => filePaths.set(name, `/dev/fd/${3 + i}`));
     const args = request.args.map((arg) =>
-      arg.replace(PLACEHOLDER, (_, kind: string, name: string) => (kind === 'file' ? pipes.get(name)!.path : all[name]!))
+      arg.replace(PLACEHOLDER, (_, kind: string, name: string) => (kind === 'file' ? filePaths.get(name)! : all[name]!))
     );
     const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 600);
     const result = await runProcess(executable, args, {
@@ -136,6 +155,8 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
       timeoutMs: timeoutSeconds * 1000,
       killTree: true,
       input: request.stdin ? all[request.stdin] : undefined,
+      extraInputs: process.platform === 'win32' ? undefined : fileNames.map((name) => all[name]!),
+      onSpawn: (pid) => pipes.forEach((pipe) => pipe.attach(pid)),
     });
     const redact = redactor(all);
     const [stdout, cutOut] = clip(redact(result.stdout));

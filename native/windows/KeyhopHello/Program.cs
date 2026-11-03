@@ -4,8 +4,9 @@
 //   keyhop-hello create [--replace]         -> {"peer": b64}
 //   keyhop-hello derive <unlock|change|grant>  stdin {"peer"} -> b64 secret
 //   keyhop-hello ask                        $KEYHOP_ASK_MESSAGE -> deny | once | always
-//   keyhop-hello pipe <name>                stdin b64 value -> "ready", then serves
-//                                           \\.\pipe\<name> to the current user until killed
+//   keyhop-hello pipe <name>                stdin: b64 value, then the reader's pid -> "ready";
+//                                           serves \\.\pipe\<name> once to that process tree,
+//                                           exits when stdin closes
 //
 // create makes a Windows Hello key (TPM-backed where available) named "keyhop".
 // derive asks Windows Hello to sign the stored challenge; RSA PKCS#1 v1.5
@@ -19,6 +20,9 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -66,7 +70,7 @@ namespace Keyhop
                     case "pipe":
                         if (args.Length < 2 || !Regex.IsMatch(args[1], "^keyhop-[0-9a-f]{32}$"))
                             throw new ExitException("Usage: keyhop-hello pipe keyhop-<32 hex>");
-                        ServePipe(args[1], Convert.FromBase64String(Console.In.ReadToEnd().Trim()));
+                        ServePipe(args[1]);
                         return 0;
                     default:
                         throw new ExitException("Usage: keyhop-hello probe | create [--replace] | derive <unlock|change|grant> | ask | pipe <name>");
@@ -125,46 +129,114 @@ namespace Keyhop
         }
 
         /// <summary>
-        /// Serves the value to every client that opens the pipe, until the process is killed.
-        /// Only the current user may connect, and never over the network.
+        /// Serves the value once, to the program keyhop started (or a process it started).
+        /// stdin: line 1 the base64 value, line 2 that program's pid once it runs.
+        /// Exits when stdin closes, so the pipe never outlives keyhop.
+        /// Only the current user may connect, and never over the network; any other
+        /// process (say a shell Claude runs) is disconnected without the value.
         /// </summary>
-        private static void ServePipe(string name, byte[] value)
+        private static void ServePipe(string name)
         {
+            var value = Convert.FromBase64String((Console.In.ReadLine() ?? "").Trim());
+            var allowedPid = 0;
+            var allowedKnown = new ManualResetEventSlim();
+            new Thread(() =>
+            {
+                if (int.TryParse(Console.In.ReadLine(), out var pid))
+                {
+                    allowedPid = pid;
+                    allowedKnown.Set();
+                }
+                Console.In.ReadToEnd();
+                Environment.Exit(0);
+            }) { IsBackground = true }.Start();
+
             var security = new PipeSecurity();
             security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User!, PipeAccessRights.FullControl, AccessControlType.Allow));
             security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
-            NamedPipeServerStream NewInstance() => new NamedPipeServerStream(name, PipeDirection.Out,
-                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.None, 0, value.Length, security);
-
-            var waiting = NewInstance();
-            Console.WriteLine("ready");
-            Console.Out.Flush();
-            while (true)
+            using (var server = new NamedPipeServerStream(name, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.None, 0, value.Length, security))
             {
-                waiting.WaitForConnection();
-                var connected = waiting;
-                // Open the next instance first, so a second reader never finds the pipe missing.
-                waiting = NewInstance();
-                new System.Threading.Thread(() => Serve(connected, value)) { IsBackground = true }.Start();
+                Console.WriteLine("ready");
+                Console.Out.Flush();
+                while (true)
+                {
+                    server.WaitForConnection();
+                    // The program may connect before keyhop has sent its pid.
+                    if (!allowedKnown.Wait(TimeSpan.FromSeconds(30))) return;
+                    if (GetNamedPipeClientProcessId(server.SafePipeHandle, out var client) && IsSelfOrDescendant((int)client, allowedPid))
+                    {
+                        try
+                        {
+                            server.Write(value, 0, value.Length);
+                            server.Flush();
+                            server.WaitForPipeDrain();
+                        }
+                        catch (IOException)
+                        {
+                            // The reader went away early.
+                        }
+                        return;
+                    }
+                    server.Disconnect();
+                }
             }
         }
 
-        private static void Serve(NamedPipeServerStream server, byte[] value)
+        /// <summary>True when pid is root or one of its descendants (walks parent links).</summary>
+        private static bool IsSelfOrDescendant(int pid, int root)
         {
-            using (server)
+            var parents = new System.Collections.Generic.Dictionary<int, int>();
+            var snapshot = CreateToolhelp32Snapshot(0x2 /* TH32CS_SNAPPROCESS */, 0);
+            if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1)) return false;
+            try
             {
-                try
-                {
-                    server.Write(value, 0, value.Length);
-                    server.Flush();
-                    server.WaitForPipeDrain();
-                }
-                catch (IOException)
-                {
-                    // The reader went away early.
-                }
+                var entry = new ProcessEntry { Size = (uint)Marshal.SizeOf(typeof(ProcessEntry)) };
+                for (var ok = Process32FirstW(snapshot, ref entry); ok; ok = Process32NextW(snapshot, ref entry))
+                    parents[(int)entry.ProcessId] = (int)entry.ParentProcessId;
             }
+            finally
+            {
+                CloseHandle(snapshot);
+            }
+            for (int current = pid, hops = 0; hops < 64; hops++)
+            {
+                if (current == root) return true;
+                if (!parents.TryGetValue(current, out var parent) || parent == current || parent == 0) return false;
+                current = parent;
+            }
+            return false;
         }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct ProcessEntry
+        {
+            public uint Size;
+            public uint Usage;
+            public uint ProcessId;
+            public IntPtr DefaultHeapId;
+            public uint ModuleId;
+            public uint Threads;
+            public uint ParentProcessId;
+            public int PriorityClassBase;
+            public uint Flags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string ExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint clientProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool Process32NextW(IntPtr snapshot, ref ProcessEntry entry);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
 
         /// <summary>Deny is the default and the cancel button; closing or 2 minutes without an answer denies.</summary>
         private static string Ask(string message)
@@ -203,7 +275,7 @@ namespace Keyhop
                 }
                 layout.Controls.Add(buttons);
                 form.Controls.Add(layout);
-                using (var timer = new Timer { Interval = 120_000 })
+                using (var timer = new System.Windows.Forms.Timer { Interval = 120_000 })
                 {
                     timer.Tick += (_, _) => { choice = "deny"; form.Close(); };
                     timer.Start();

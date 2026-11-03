@@ -9,6 +9,7 @@ import { changeAllowed, resolveAllowed, summarize, syncVault } from './secrets.t
 import { serve } from './server.ts';
 import { runSetup } from './setup.ts';
 import { VaultStore } from './store.ts';
+import { DELIVERIES, type Delivery } from './types.ts';
 import { runUpdateCommand } from './update.ts';
 import { VERSION } from './version.ts';
 
@@ -23,10 +24,11 @@ Usage: keyhop <command>
   add NAME REF [--allow a,b] [--description text]
                                 Link one secret, e.g. keyhop add GH_TOKEN op://Dev/GitHub/token --allow gh
   remove NAME                   Unlink a secret and delete it from the vault
-  allow NAME COMMAND...         Let COMMAND (gh, /usr/local/bin/aws …) receive NAME
+  allow NAME COMMAND... [--as env,stdin,file,arg]
+                                Let COMMAND (gh, /usr/local/bin/aws …) receive NAME, by default as an
+                                environment variable. arg puts the value in its command line, where
+                                the process list shows it
   deny NAME COMMAND...          Take that back
-  allow-arg NAME / deny-arg NAME
-                                Let NAME be placed in an argument ({{arg:NAME}}); it shows in the process list
   doctor [--json]               Check biometrics, vault, tools, scripts and Claude Code
   update [--check] [--ref R]    Install the latest version from GitHub
   serve                         Run the MCP server (stdio); Claude Code starts this
@@ -95,8 +97,10 @@ async function main(argv: string[]): Promise<number> {
       console.log(`Last sync: ${syncedAt ?? 'never'}`);
       for (const s of secrets)
         console.log(
-          `  ${s.name}  (${s.source})  ${s.allowedCommands.length ? s.allowedCommands.join(', ') : 'no commands allowed'}` +
-            (s.asArgument ? '  [may be an argument]' : '')
+          `  ${s.name}  (${s.source})  ` +
+            (s.allowedCommands.length
+              ? s.allowedCommands.map((c) => `${c.path} [${c.as.join(', ')}]`).join(', ')
+              : 'no commands allowed')
         );
       return 0;
     }
@@ -131,23 +135,18 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'allow':
     case 'deny': {
+      const as = command === 'allow' ? option(args, '--as') : undefined;
       const [name, ...commands] = args;
-      if (!name || !commands.length) throw new Error(`Usage: keyhop ${command} NAME COMMAND...`);
+      if (!name || !commands.length) throw new Error(`Usage: keyhop ${command} NAME COMMAND...${command === 'allow' ? ' [--as env,stdin,file,arg]' : ''}`);
+      const modes = (as ?? 'env').split(',').map((m) => m.trim());
+      const unknown = modes.filter((m) => !DELIVERIES.includes(m as Delivery));
+      if (unknown.length) throw new Error(`Unknown --as ${unknown.join(', ')}: use ${DELIVERIES.join(', ')}.`);
       const resolved = command === 'allow' ? resolveAllowed(commands) : commands.map((c) => (Bun.which(c) ?? c));
-      const result = await changeAllowed(store(), { [name]: command === 'allow' ? { add: resolved } : { remove: resolved } });
+      const result = await changeAllowed(store(), {
+        [name]: command === 'allow' ? { add: resolved, as: modes as Delivery[] } : { remove: resolved },
+      });
       console.log(`${name} may be used with: ${result[name]!.join(', ') || 'nothing'}`);
-      return 0;
-    }
-    case 'allow-arg':
-    case 'deny-arg': {
-      const [name] = args;
-      if (!name || args.length > 1) throw new Error(`Usage: keyhop ${command} NAME`);
-      await changeAllowed(store(), { [name]: { asArgument: command === 'allow-arg' } });
-      console.log(
-        command === 'allow-arg'
-          ? `${name} may now be placed in an argument ({{arg:${name}}}) for its allowed commands. It shows in the process list while they run.`
-          : `${name} may no longer be placed in an argument.`
-      );
+      if (modes.includes('arg')) console.log('As an argument, the value shows in the process list while the program runs.');
       return 0;
     }
     default:

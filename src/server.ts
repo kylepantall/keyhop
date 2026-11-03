@@ -57,10 +57,11 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
         '`gh secret set`, `wrangler secret put`, `docker login --password-stdin`), as a file path ' +
         '({{file:NAME}} in an argument becomes the path of a named pipe that reads as the value, e.g. ' +
         '`ANTHROPIC_KEY=@{{file:ANTHROPIC_KEY}}`; nothing is written to disk), or inside an argument ' +
-        '({{arg:NAME}}, only for secrets list_secrets marks asArgument; prefer file or stdin). A secret not ' +
-        'allowed for this program (see list_secrets) makes keyhop ask the user to deny, allow once or ' +
-        'always allow; the call waits for them. Secret values and their common encodings are redacted ' +
-        'from stdout/stderr.',
+        '({{arg:NAME}}; prefer file or stdin). Each program is allowed per secret and per way (list_secrets ' +
+        'shows both as allowedCommands[].as). Anything not yet allowed makes keyhop ask the user to deny, ' +
+        'allow once or always allow, and the call waits for them; arg is never asked, only the user can ' +
+        'grant it from their terminal. A {{file:NAME}} path can be read once, by this program only. Secret ' +
+        'values and their common encodings are redacted from stdout/stderr.',
       inputSchema: {
         command: z.string().min(1).describe('Program name on PATH (gh) or absolute path. Not a shell.'),
         args: z

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- `run_with_secrets` can hand a secret over on stdin (`stdin: NAME`), as a file path (`{{file:NAME}}`, a pipe readable once and only by that program, never on disk), or inside an argument (`{{arg:NAME}}`).
+- Grants are per way: `keyhop allow NAME gh --as env,stdin,file,arg`. Existing grants are environment only. The access dialog can grant env, stdin and file; `arg` only from the terminal.
+- `list_secrets` / `keyhop list` show how each program may receive each secret.
+
 ## 0.5.0
 
 - Faster syncs: whole 1Password vaults fetch only items that are new or changed since the last sync (by item version). The cache is kept inside the encrypted vault. `keyhop sync --full` refetches everything.
