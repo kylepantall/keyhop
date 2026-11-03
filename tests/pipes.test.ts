@@ -20,7 +20,8 @@ describe.if(process.platform === 'win32')('Windows secret pipe', () => {
         ['-NoProfile', '-NonInteractive', '-Command', `[IO.File]::ReadAllText('${pipe.path}')`],
         { timeoutMs: 30_000, onSpawn: (pid) => pipe.attach(pid) }
       );
-      expect(reader.stdout.trim()).toBe('pipe-value-1');
+      // stderr rides along so a failure shows why the read failed.
+      expect({ out: reader.stdout.trim(), err: reader.stderr.trim() }).toEqual({ out: 'pipe-value-1', err: '' });
       expect(await stranger).not.toBe('pipe-value-1');
     } finally {
       await pipe.close();

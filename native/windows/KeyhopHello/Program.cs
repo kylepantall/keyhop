@@ -154,31 +154,43 @@ namespace Keyhop
             var security = new PipeSecurity();
             security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User!, PipeAccessRights.FullControl, AccessControlType.Allow));
             security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
-            using (var server = new NamedPipeServerStream(name, PipeDirection.Out, 1, PipeTransmissionMode.Byte, PipeOptions.None, 0, value.Length, security))
+            NamedPipeServerStream NewInstance() => new NamedPipeServerStream(name, PipeDirection.Out,
+                NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Byte, PipeOptions.None, 0, value.Length, security);
+
+            var served = 0;
+            var waiting = NewInstance();
+            Console.WriteLine("ready");
+            Console.Out.Flush();
+            while (true)
             {
-                Console.WriteLine("ready");
-                Console.Out.Flush();
-                while (true)
+                waiting.WaitForConnection();
+                var connected = waiting;
+                // Keep an instance free, so a process holding a connection open can't
+                // leave the real program with "pipe busy".
+                waiting = NewInstance();
+                new Thread(() =>
                 {
-                    server.WaitForConnection();
-                    // The program may connect before keyhop has sent its pid.
-                    if (!allowedKnown.Wait(TimeSpan.FromSeconds(30))) return;
-                    if (GetNamedPipeClientProcessId(server.SafePipeHandle, out var client) && IsSelfOrDescendant((int)client, allowedPid))
+                    using (connected)
                     {
+                        // The program may connect before keyhop has sent its pid.
+                        if (!allowedKnown.Wait(TimeSpan.FromSeconds(30))) return;
+                        if (!GetNamedPipeClientProcessId(connected.SafePipeHandle, out var client) || !IsSelfOrDescendant((int)client, allowedPid))
+                            return;
+                        // Served once: any later reader, even the program itself, gets nothing.
+                        if (Interlocked.Exchange(ref served, 1) == 1) return;
                         try
                         {
-                            server.Write(value, 0, value.Length);
-                            server.Flush();
-                            server.WaitForPipeDrain();
+                            connected.Write(value, 0, value.Length);
+                            connected.Flush();
+                            connected.WaitForPipeDrain();
                         }
                         catch (IOException)
                         {
                             // The reader went away early.
                         }
-                        return;
+                        Environment.Exit(0);
                     }
-                    server.Disconnect();
-                }
+                }) { IsBackground = true }.Start();
             }
         }
 
