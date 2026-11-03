@@ -2,7 +2,7 @@ import { assertName, loadConfig } from './config.ts';
 import { assertAllowable, pinExecutable, resolveExecutable } from './policy.ts';
 import type { VaultStore } from './store.ts';
 import { collectSecrets, planSteps } from './sync.ts';
-import type { AllowedExecutable, Progress, SyncResult, VaultData } from './types.ts';
+import type { AllowedExecutable, Progress, SyncCacheState, SyncResult, VaultData } from './types.ts';
 
 export function syncedSecrets(vault: VaultData): Record<string, string> {
   return Object.fromEntries(Object.entries(vault.secrets).map(([name, entry]) => [name, entry.value]));
@@ -13,10 +13,19 @@ export function syncedSecrets(vault: VaultData): Record<string, string> {
  * Access rules survive a name disappearing, but are cleared when a name comes
  * back from a different origin (another ref, or an edited script).
  */
-export async function syncVault(store: VaultStore, onProgress?: Progress): Promise<SyncResult> {
+export async function syncVault(
+  store: VaultStore,
+  onProgress?: Progress,
+  options: { full?: boolean } = {}
+): Promise<SyncResult> {
   const config = await loadConfig(store.paths);
   const timeoutMs = Math.min(Math.max(Number(config.stepTimeoutSeconds) || 120, 1), 3600) * 1000;
-  const collected = await collectSecrets(await planSteps(config, store.paths.syncDir, timeoutMs, onProgress), onProgress);
+  // Whole 1Password vaults sync incrementally from the cache in the vault, so
+  // unlock first to read it (the save at the end reuses this unlock).
+  const incremental = !!config.onePassword?.vaults?.length && !options.full;
+  const cache: SyncCacheState = { previous: incremental ? ((await store.read()).cache ?? {}) : {}, next: {} };
+  const steps = await planSteps(config, store.paths.syncDir, timeoutMs, onProgress, cache);
+  const collected = await collectSecrets(steps, onProgress);
   const now = new Date().toISOString();
   onProgress?.(`Saving ${Object.keys(collected.values).length} secret(s) to the vault`);
   return store.update('unlock', (vault) => {
@@ -37,6 +46,7 @@ export async function syncVault(store: VaultStore, onProgress?: Progress): Promi
       })
     );
     vault.syncedAt = now;
+    vault.cache = cache.next;
     return { steps: collected.steps, total: Object.keys(vault.secrets).length, removed, rulesCleared };
   });
 }

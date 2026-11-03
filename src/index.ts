@@ -17,7 +17,8 @@ const HELP = `keyhop ${VERSION} — secrets Claude can use but never read
 Usage: keyhop <command>
 
   setup [--reset]               Guided setup: vault, password tools, allowlists, first sync
-  sync                          Pull secrets from linked tools and sync.d scripts
+  sync [--full]                 Pull secrets from linked tools and sync.d scripts
+                                (1Password vaults fetch only changed items; --full refetches all)
   list                          Show secret names, sources and allowed commands (no values)
   add NAME REF [--allow a,b] [--description text]
                                 Link one secret, e.g. keyhop add GH_TOKEN op://Dev/GitHub/token --allow gh
@@ -73,7 +74,9 @@ async function main(argv: string[]): Promise<number> {
       spinner?.start('Syncing (your password tools may ask you to approve)');
       let result;
       try {
-        result = await syncVault(store(), spinner ? (message) => spinner.message(message) : undefined);
+        result = await syncVault(store(), spinner ? (message) => spinner.message(message) : undefined, {
+          full: args.includes('--full'),
+        });
       } catch (error) {
         spinner?.error('Sync failed');
         throw error;

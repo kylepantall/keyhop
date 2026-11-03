@@ -7,23 +7,9 @@
 import { assertName } from './config.ts';
 import { locate, PROVIDERS } from './providers.ts';
 import { runProcess } from './process.ts';
-import type { Config, OnePasswordVault, Progress } from './types.ts';
+import type { Config, OnePasswordVault, OnePasswordVaultCache, OpField, OpItem, Progress, SyncCacheState } from './types.ts';
 
-export interface OpField {
-  id: string;
-  type?: string;
-  purpose?: string;
-  label?: string;
-  value?: string;
-  section?: { id?: string };
-}
-
-export interface OpItem {
-  id: string;
-  title: string;
-  vault?: { id: string };
-  fields?: OpField[];
-}
+export type { OpField, OpItem };
 
 /** Values that aren't usable as a credential on their own. */
 const SKIPPED_TYPES = new Set(['OTP']);
@@ -85,6 +71,18 @@ function fieldLabel(field: OpField): string {
   return field.label || field.purpose?.toLowerCase() || field.id;
 }
 
+/** Fields that become secrets under this vault's field setting. */
+function keptFields(item: OpItem, fields: OnePasswordVault['fields']): OpField[] {
+  return (item.fields ?? []).filter(
+    (field) => field.value && !SKIPPED_TYPES.has(field.type ?? '') && (fields === 'all' || field.type === 'CONCEALED')
+  );
+}
+
+/** `op item list` stamp that changes on every edit; empty when op gives none (always refetch). */
+function versionStamp(listed: { version?: number | string; updated_at?: string }): string {
+  return listed.version === undefined && !listed.updated_at ? '' : `${listed.version ?? ''}@${listed.updated_at ?? ''}`;
+}
+
 /**
  * Turns items into secrets. Names that clash get _2, _3 … in a stable order;
  * fields whose name can't be an environment variable are skipped.
@@ -98,9 +96,7 @@ export function itemsToSecrets(
   const out: Record<string, { value: string; origin: string }> = {};
   const sorted = [...items].sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
   for (const item of sorted) {
-    for (const field of item.fields ?? []) {
-      if (!field.value || SKIPPED_TYPES.has(field.type ?? '')) continue;
-      if (fields !== 'all' && field.type !== 'CONCEALED') continue;
+    for (const field of keptFields(item, fields)) {
       const base = toSecretName(item.title, fieldLabel(field));
       let name = base;
       for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
@@ -110,7 +106,7 @@ export function itemsToSecrets(
         continue;
       }
       taken.add(name);
-      out[name] = { value: field.value, origin: fieldOrigin(vaultId, item, field) };
+      out[name] = { value: field.value!, origin: fieldOrigin(vaultId, item, field) };
     }
   }
   return out;
@@ -137,12 +133,17 @@ function bar(done: number, total: number, width = 20): string {
   return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`;
 }
 
-/** Reads every item (with values) from each linked vault. */
+/**
+ * Reads every item (with values) from each linked vault. With `cache`, items
+ * whose version stamp matches the last sync come from it, and only new or
+ * changed items are fetched; the fetched result is written to `cache.next`.
+ */
 export async function readVaults(
   config: Config,
   timeoutMs: number,
   taken: Set<string>,
-  onProgress?: Progress
+  onProgress?: Progress,
+  cache?: SyncCacheState
 ): Promise<Record<string, { value: string; origin: string }>> {
   const vaults = config.onePassword?.vaults ?? [];
   if (!vaults.length) return {};
@@ -154,19 +155,40 @@ export async function readVaults(
     const label = vault.name ?? vault.id;
     try {
       onProgress?.(`1Password ${label}: listing items`);
-      const list = JSON.parse(await opJson(op, ['item', 'list', '--vault', vault.id], config, timeoutMs)) as { id: string }[];
-      const items: OpItem[] = [];
-      const get = async (id: string) => {
-        items.push(
-          ...(parseJsonObjects(await opJson(op, ['item', 'get', id, '--vault', vault.id, '--reveal'], config, timeoutMs)) as OpItem[])
-        );
-        onProgress?.(`1Password ${label}: ${bar(items.length, list.length)} ${items.length}/${list.length} items`);
+      const list = JSON.parse(await opJson(op, ['item', 'list', '--vault', vault.id], config, timeoutMs)) as {
+        id: string;
+        version?: number | string;
+        updated_at?: string;
+      }[];
+      const fields = vault.fields ?? 'concealed';
+      const previous = cache?.previous.onePassword?.[vault.id];
+      const known = previous?.fields === fields ? previous.items : {};
+      const kept: OnePasswordVaultCache['items'] = {};
+      const stale = list.filter((listed) => {
+        const version = versionStamp(listed);
+        const hit = known[listed.id];
+        if (version && hit?.version === version) kept[listed.id] = hit;
+        return !kept[listed.id];
+      });
+      let done = 0;
+      const get = async (listed: (typeof list)[number]) => {
+        const [item] = parseJsonObjects(
+          await opJson(op, ['item', 'get', listed.id, '--vault', vault.id, '--reveal'], config, timeoutMs)
+        ) as OpItem[];
+        // Keep only what becomes a secret, so the cache holds no more than the vault already does.
+        if (item) kept[listed.id] = { version: versionStamp(listed), item: { ...item, fields: keptFields(item, fields) } };
+        done++;
+        onProgress?.(`1Password ${label}: ${bar(done, stale.length)} ${done}/${stale.length} changed items`);
       };
+      if (!stale.length) onProgress?.(`1Password ${label}: no changes in ${list.length} items`);
       // op won't read item ids from a Bun stdin pipe, so fetch each item. The
       // first call alone, so 1Password shows one approval; then a few at a time.
-      if (list.length) await get(list[0]!.id);
-      for (let i = 1; i < list.length; i += GET_CONCURRENCY)
-        await Promise.all(list.slice(i, i + GET_CONCURRENCY).map((item) => get(item.id)));
+      if (stale.length) await get(stale[0]!);
+      for (let i = 1; i < stale.length; i += GET_CONCURRENCY)
+        await Promise.all(stale.slice(i, i + GET_CONCURRENCY).map(get));
+      if (cache) (cache.next.onePassword ??= {})[vault.id] = { fields, items: kept };
+      // Deleted items are simply absent from `list`, so they drop out here.
+      const items = list.map((listed) => kept[listed.id]?.item).filter((item): item is OpItem => !!item);
       Object.assign(out, itemsToSecrets(items, vault.id, vault.fields, taken));
     } catch (error) {
       throw new Error(`1Password vault ${label}: ${(error as Error).message} ${provider.signInHint}`);

@@ -67,6 +67,7 @@ On a first install the installer starts `keyhop setup`, which:
 | Linked by name | a secret you linked one by one keeps its name and wins over a vault field |
 | Access rules | bound to the field's 1Password id, so renaming an item renames the secret, which starts with no allowed commands |
 | Config | `onePassword.vaults` in `config.json`: `[{ "id": "…", "fields": "concealed" }]` |
+| Later syncs | only new or changed items are fetched (by 1Password's item version); deleted items drop out. The cache lives inside the encrypted vault. `keyhop sync --full` refetches everything |
 
 ## Your own sync scripts
 

@@ -16,7 +16,7 @@ import { compiled, windowsSystem } from './paths.ts';
 import { hashFile } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
-import type { Config, Progress, StepResult } from './types.ts';
+import type { Config, Progress, StepResult, SyncCacheState } from './types.ts';
 
 export interface Produced {
   value: string;
@@ -126,7 +126,8 @@ export async function planSteps(
   config: Config,
   syncDir: string,
   stepTimeoutMs: number,
-  onProgress?: Progress
+  onProgress?: Progress,
+  cache?: SyncCacheState
 ): Promise<SyncStep[]> {
   const byTool = new Map<string, [string, string][]>();
   for (const [name, source] of Object.entries(config.secrets ?? {})) {
@@ -142,7 +143,7 @@ export async function planSteps(
       // Whole vaults first; a secret linked by name overrides the same name from a vault.
       const values: Record<string, Produced> =
         id === '1password'
-          ? await readVaults(config, stepTimeoutMs, new Set(entries.map(([name]) => name)), onProgress)
+          ? await readVaults(config, stepTimeoutMs, new Set(entries.map(([name]) => name)), onProgress, cache)
           : {};
       // One at a time: tools such as op show a single unlock prompt this way.
       for (const [name, ref] of entries) {

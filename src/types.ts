@@ -83,6 +83,43 @@ export interface VaultData {
   syncedAt: string | null;
   secrets: Record<string, SecretEntry>;
   policy: Record<string, SecretPolicy>;
+  /** What the last sync fetched, so the next one only fetches what changed. Holds secret values. */
+  cache?: SyncCache;
+}
+
+export interface OpField {
+  id: string;
+  type?: string;
+  purpose?: string;
+  label?: string;
+  value?: string;
+  section?: { id?: string };
+}
+
+/** A 1Password item as `op item get --format json` prints it (the parts keyhop reads). */
+export interface OpItem {
+  id: string;
+  title: string;
+  vault?: { id: string };
+  fields?: OpField[];
+}
+
+export interface OnePasswordVaultCache {
+  /** Field setting the cache was built with; a different setting rebuilds it. */
+  fields: NonNullable<OnePasswordVault['fields']>;
+  /** Item id → its 1Password version stamp and the fields keyhop keeps from it. */
+  items: Record<string, { version: string; item: OpItem }>;
+}
+
+export interface SyncCache {
+  /** Keyed by 1Password vault id. */
+  onePassword?: Record<string, OnePasswordVaultCache>;
+}
+
+/** The cache a sync starts from and the one it leaves for the next sync. */
+export interface SyncCacheState {
+  previous: SyncCache;
+  next: SyncCache;
 }
 
 /** `grant`: confirms an access request the user just approved in keyhop's dialog. */

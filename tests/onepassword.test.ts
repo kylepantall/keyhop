@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { itemsToSecrets, parseJsonObjects, readVaults, type OpItem } from '../src/onepassword.ts';
+import { saveConfig } from '../src/config.ts';
+import { syncedSecrets, syncVault } from '../src/secrets.ts';
 import { planSteps } from '../src/sync.ts';
-import { tempHome } from './support.ts';
+import { newStore, tempHome } from './support.ts';
 
 const unix = process.platform !== 'win32';
 
@@ -117,5 +119,126 @@ esac
     cleanups.push(cleanup);
     const steps = await planSteps({ onePassword: { vaults: [{ id: 'v1' }] } }, p.syncDir, 1000);
     expect(steps.map((s) => s.name)).toEqual(['00-1password']);
+  });
+});
+
+describe.if(unix)('incremental 1Password sync', () => {
+  const originalPath = process.env.PATH;
+  const cleanups: (() => Promise<void>)[] = [];
+  afterEach(async () => {
+    process.env.PATH = originalPath;
+    await Promise.all(cleanups.splice(0).map((c) => c()));
+  });
+
+  /** Fake op backed by files: list.json, items/<id>.json; every `item get` is logged to gets.log. */
+  async function fakeOp() {
+    const { p, cleanup } = await tempHome();
+    cleanups.push(cleanup);
+    const dir = p.dir;
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    await mkdir(join(dir, 'items'), { recursive: true });
+    await writeFile(
+      join(dir, 'bin', 'op'),
+      `#!/bin/sh
+case "$1 $2" in
+  "item list") cat "${dir}/list.json" ;;
+  "item get") echo "$3" >> "${dir}/gets.log"; cat "${dir}/items/$3.json" ;;
+  *) exit 1 ;;
+esac
+`
+    );
+    await chmod(join(dir, 'bin', 'op'), 0o755);
+    process.env.PATH = `${join(dir, 'bin')}:${originalPath}`;
+    const put = async (id: string, title: string, version: number, value: string) => {
+      const item = {
+        id,
+        title,
+        fields: [
+          { id: 'u', type: 'STRING', purpose: 'USERNAME', label: 'username', value: 'kyle' },
+          { id: 'k', type: 'CONCEALED', label: 'key', value },
+        ],
+      };
+      await writeFile(join(dir, 'items', `${id}.json`), JSON.stringify(item));
+      return { id, version, updated_at: `2026-11-0${version}T00:00:00Z` };
+    };
+    const list = async (entries: object[]) => writeFile(join(dir, 'list.json'), JSON.stringify(entries));
+    const gets = async () => {
+      const log = Bun.file(join(dir, 'gets.log'));
+      return (await log.exists()) ? (await log.text()).split('\n').filter(Boolean) : [];
+    };
+    const resetGets = () => writeFile(join(dir, 'gets.log'), '');
+    return { put, list, gets, resetGets };
+  }
+
+  test('a second sync fetches only new and changed items, and drops deleted ones', async () => {
+    const op = await fakeOp();
+    const a = await op.put('a', 'Alpha', 1, 'va1');
+    const b = await op.put('b', 'Beta', 1, 'vb1');
+    const c = await op.put('c', 'Gamma', 1, 'vc1');
+    await op.list([a, b, c]);
+    const config = { onePassword: { vaults: [{ id: 'v1' }] } };
+
+    const first = { previous: {}, next: {} };
+    const out1 = await readVaults(config, 2000, new Set(), undefined, first);
+    expect(Object.keys(out1).sort()).toEqual(['ALPHA_KEY', 'BETA_KEY', 'GAMMA_KEY']);
+    expect((await op.gets()).sort()).toEqual(['a', 'b', 'c']);
+
+    // Nothing changed: no item is fetched, and the secrets are the same.
+    await op.resetGets();
+    const second = { previous: first.next, next: {} };
+    expect(await readVaults(config, 2000, new Set(), undefined, second)).toEqual(out1);
+    expect(await op.gets()).toEqual([]);
+
+    // Beta edited, Gamma deleted, Delta added.
+    await op.resetGets();
+    const b2 = await op.put('b', 'Beta', 2, 'vb2');
+    const d = await op.put('d', 'Delta', 1, 'vd1');
+    await op.list([a, b2, d]);
+    const third = { previous: second.next, next: {} };
+    const out3 = await readVaults(config, 2000, new Set(), undefined, third);
+    expect((await op.gets()).sort()).toEqual(['b', 'd']);
+    expect(out3.BETA_KEY?.value).toBe('vb2');
+    expect(out3.GAMMA_KEY).toBeUndefined();
+    expect(Object.keys(out3).sort()).toEqual(['ALPHA_KEY', 'BETA_KEY', 'DELTA_KEY']);
+  });
+
+  test('the cache keeps only fields that become secrets', async () => {
+    const op = await fakeOp();
+    await op.list([await op.put('a', 'Alpha', 1, 'va1')]);
+    const state = { previous: {}, next: {} as import('../src/types.ts').SyncCache };
+    await readVaults({ onePassword: { vaults: [{ id: 'v1' }] } }, 2000, new Set(), undefined, state);
+    const cached = state.next.onePassword!.v1!.items.a!.item;
+    expect(cached.fields!.map((f) => f.id)).toEqual(['k']);
+  });
+
+  test('changing the field setting refetches everything', async () => {
+    const op = await fakeOp();
+    await op.list([await op.put('a', 'Alpha', 1, 'va1'), await op.put('b', 'Beta', 1, 'vb1')]);
+    const first = { previous: {}, next: {} };
+    await readVaults({ onePassword: { vaults: [{ id: 'v1' }] } }, 2000, new Set(), undefined, first);
+    await op.resetGets();
+    const all = { onePassword: { vaults: [{ id: 'v1', fields: 'all' as const }] } };
+    const out = await readVaults(all, 2000, new Set(), undefined, { previous: first.next, next: {} });
+    expect((await op.gets()).sort()).toEqual(['a', 'b']);
+    expect(out.ALPHA_USERNAME?.value).toBe('kyle');
+  });
+
+  test('syncVault keeps the cache in the vault and --full ignores it', async () => {
+    const op = await fakeOp();
+    await op.list([await op.put('a', 'Alpha', 1, 'va1'), await op.put('b', 'Beta', 1, 'vb1')]);
+    const { p, cleanup } = await tempHome();
+    cleanups.push(cleanup);
+    await saveConfig(p, { onePassword: { vaults: [{ id: 'v1' }] } });
+    const store = await newStore(p);
+
+    await syncVault(store);
+    expect((await store.read()).cache?.onePassword?.v1).toBeDefined();
+    await op.resetGets();
+    await syncVault(store);
+    expect(await op.gets()).toEqual([]);
+    expect(syncedSecrets(await store.read()).ALPHA_KEY).toBe('va1');
+
+    await syncVault(store, undefined, { full: true });
+    expect((await op.gets()).sort()).toEqual(['a', 'b']);
   });
 });

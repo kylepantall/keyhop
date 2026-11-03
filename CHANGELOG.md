@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Faster syncs: whole 1Password vaults fetch only items that are new or changed since the last sync (by item version). The cache is kept inside the encrypted vault. `keyhop sync --full` refetches everything.
+- ⚠️ With whole vaults linked, sync asks for Touch ID / Windows Hello before talking to 1Password (to read the cache), still once per sync.
+
 ## 0.4.0
 
 - Windows now installs from GitHub Releases: a compiled `keyhop.exe` and a C# `keyhop-hello.exe` for Windows Hello and the access dialog. Antivirus flagged the old `.cmd` launcher and PowerShell helpers; no PowerShell runs after install. `keyhop update` downloads and verifies the release itself.
