@@ -8,19 +8,19 @@ try {
   $dist = Join-Path $root 'dist'
   $stage = Join-Path $dist 'keyhop'
   if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
-  New-Item -ItemType Directory -Force -Path (Join-Path $stage 'native\build'), (Join-Path $stage 'examples') | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $stage 'native\build') | Out-Null
 
   dotnet build native/windows/KeyhopHello -c Release -o (Join-Path $stage 'native\build') --nologo
   if ($LASTEXITCODE -ne 0) { throw 'Building keyhop-hello.exe failed.' }
   # Only the exe and what it loads; no PDBs or build leftovers.
   Get-ChildItem (Join-Path $stage 'native\build') | Where-Object { $_.Extension -notin '.exe', '.dll', '.config' } | Remove-Item -Force
 
-  # KEYHOP_COMPILED tells src/paths.ts to find native/ and examples/ beside keyhop.exe.
+  # KEYHOP_COMPILED tells src/paths.ts to find native/ beside keyhop.exe. The starter
+  # sync scripts are embedded (src/examples.ts), so no .ps1/.sh ships loose.
   # Never load bunfig.toml or .env from the working directory (often a project Claude can write to).
   bun build --compile --minify --target=bun-windows-x64-baseline --define KEYHOP_COMPILED=true `
     --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/index.ts --outfile (Join-Path $stage 'keyhop.exe')
   if ($LASTEXITCODE -ne 0) { throw 'Compiling keyhop.exe failed.' }
-  Copy-Item -Recurse examples/sync.d (Join-Path $stage 'examples\sync.d')
   Copy-Item LICENSE, README.md $stage
 
   $zip = Join-Path $dist 'keyhop-windows-x64.zip'
