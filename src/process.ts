@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { windowsSystem } from './paths.ts';
 
 export interface ProcessResult {
   code: number | null;
@@ -30,7 +31,7 @@ const DRAIN_MS = 1_000;
 function killGroup(child: ChildProcess): void {
   if (!child.pid) return;
   try {
-    if (process.platform === 'win32') spawnSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
+    if (process.platform === 'win32') spawnSync(windowsSystem('taskkill.exe'), ['/T', '/F', '/PID', String(child.pid)], { windowsHide: true });
     else process.kill(-child.pid, 'SIGKILL');
   } catch {
     // Already gone.

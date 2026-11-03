@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { appRoot } from './paths.ts';
+import { appRoot, windowsSystem } from './paths.ts';
 import { runProcess } from './process.ts';
 import type { AuthAction, Authenticator, KeyFile } from './types.ts';
 
@@ -23,7 +23,7 @@ async function runHelper(args: string[], input: object): Promise<string> {
     process.platform === 'darwin'
       ? [macHelperPath, []]
       : [
-          'powershell.exe',
+          windowsSystem('powershell.exe'),
           ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', windowsHelperPath],
         ];
   if (process.platform === 'darwin' && !existsSync(macHelperPath))

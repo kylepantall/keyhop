@@ -6,6 +6,8 @@ export interface Config {
   unlockMinutes?: number;
   /** Seconds each sync step may run. */
   stepTimeoutSeconds?: number;
+  /** Ask the user (dialog + Touch ID / Hello) when Claude runs a command a secret isn't allowed for. Default true. */
+  askForAccess?: boolean;
   onePassword?: {
     account?: string;
     /** Whole vaults: every item becomes ITEM_FIELD secrets in the `00-1password` step. */
@@ -83,7 +85,8 @@ export interface VaultData {
   policy: Record<string, SecretPolicy>;
 }
 
-export type AuthAction = 'unlock' | 'change';
+/** `grant`: confirms an access request the user just approved in keyhop's dialog. */
+export type AuthAction = 'unlock' | 'change' | 'grant';
 
 /** Platform biometric backend (Secure Enclave + Touch ID, or Windows Hello). */
 export interface Authenticator {

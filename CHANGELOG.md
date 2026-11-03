@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Access requests: when Claude runs a program a secret isn't allowed for, keyhop asks you (Deny / Allow once / Always allow), confirmed with Touch ID / Windows Hello. Off with `"askForAccess": false`.
+- Windows: system programs (PowerShell, cmd, taskkill) run by full path, so a copy planted in the working folder is never used.
+
 ## 0.2.2
 
 - `keyhop sync` and setup show a spinner with each step and a progress bar per 1Password vault.

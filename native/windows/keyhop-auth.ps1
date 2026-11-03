@@ -1,7 +1,7 @@
 # keyhop-auth.ps1: Windows Hello-gated secret for the keyhop vault.
 #
 #   keyhop-auth.ps1 create                 -> {"peer": b64}
-#   keyhop-auth.ps1 derive <unlock|change>  stdin {"peer"} -> b64 secret
+#   keyhop-auth.ps1 derive <unlock|change|grant>  stdin {"peer"} -> b64 secret
 #
 # create makes a Windows Hello key (TPM-backed where available) named "keyhop".
 # derive asks Windows Hello to sign the stored challenge; RSA PKCS#1 v1.5
@@ -73,7 +73,7 @@ try {
       $signature = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::ToArray($signed.Result)
       [Convert]::ToBase64String($signature)
     }
-    default { Fail 'Usage: keyhop-auth.ps1 create | derive <unlock|change>' }
+    default { Fail 'Usage: keyhop-auth.ps1 create | derive <unlock|change|grant>' }
   }
 } catch {
   Fail $_.Exception.Message

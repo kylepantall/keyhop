@@ -67,6 +67,21 @@ export class VaultStore {
     });
   }
 
+  /** Prompts even while unlocked: the user confirms an access request in person. */
+  confirm(action: AuthAction): Promise<void> {
+    return this.exclusive(async () => {
+      if (!this.initialized) throw new Error('No vault yet. Run: keyhop setup');
+      const key = JSON.parse(await readFile(this.paths.key, 'utf8')) as KeyFile;
+      this.remember(deriveKek(await this.auth.derive(key, action), Buffer.from(key.salt, 'base64')));
+      try {
+        decryptVault(await readFile(this.paths.vault, 'utf8'), this.kek!);
+      } catch (error) {
+        this.lock();
+        throw error;
+      }
+    });
+  }
+
   lock(): void {
     this.kek?.fill(0);
     this.kek = null;

@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { AccessGate, platformApprover } from './approve.ts';
 import { loadConfig, unlockMs } from './config.ts';
 import { platformAuthenticator } from './auth.ts';
 import { paths } from './paths.ts';
@@ -19,7 +20,7 @@ async function respond(work: () => Promise<unknown>): Promise<ToolResult> {
   }
 }
 
-export function createServer(store: VaultStore): McpServer {
+export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
   const server = new McpServer(
     { name: 'keyhop', version: VERSION },
     {
@@ -27,7 +28,9 @@ export function createServer(store: VaultStore): McpServer {
         'keyhop holds API keys and passwords you can use but never read. Call list_secrets to see names and ' +
         'which commands each may be given to, then run_with_secrets to run one of those commands with the ' +
         'secrets as environment variables. Output is redacted. Unlocking prompts the user for Touch ID or ' +
-        'Windows Hello. Only the user can change which commands a secret may be used with.',
+        'Windows Hello. Only the user can change which commands a secret may be used with: if a secret is ' +
+        'not allowed for a program, keyhop may ask the user directly (a dialog plus Touch ID / Windows ' +
+        'Hello) and the call waits for their answer. Do not retry a denied request.',
     }
   );
 
@@ -50,8 +53,9 @@ export function createServer(store: VaultStore): McpServer {
       title: 'Run a command with secrets',
       description:
         'Runs a program directly (no shell, so $VARS in args are not expanded) with the named secrets set ' +
-        'as environment variables. Each secret must allow this program (see list_secrets). Secret values ' +
-        'and their common encodings are redacted from stdout/stderr.',
+        'as environment variables. A secret not allowed for this program (see list_secrets) makes keyhop ' +
+        'ask the user to deny, allow once or always allow; the call waits for them. Secret values and ' +
+        'their common encodings are redacted from stdout/stderr.',
       inputSchema: {
         command: z.string().min(1).describe('Program name on PATH (gh) or absolute path. Not a shell.'),
         args: z.array(z.string()).default([]).describe('Arguments, passed as-is.'),
@@ -61,7 +65,7 @@ export function createServer(store: VaultStore): McpServer {
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
-    (input) => respond(() => runWithSecrets(store, input))
+    (input) => respond(() => runWithSecrets(store, input, { gate }))
   );
 
   server.registerTool(
@@ -95,6 +99,8 @@ export function createServer(store: VaultStore): McpServer {
 
 export async function serve(): Promise<void> {
   const p = paths();
-  const store = new VaultStore(p, platformAuthenticator(), unlockMs(await loadConfig(p)));
-  await createServer(store).connect(new StdioServerTransport());
+  const config = await loadConfig(p);
+  const store = new VaultStore(p, platformAuthenticator(), unlockMs(config));
+  const approver = config.askForAccess === false ? null : platformApprover();
+  await createServer(store, approver ? new AccessGate(approver) : undefined).connect(new StdioServerTransport());
 }

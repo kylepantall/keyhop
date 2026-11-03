@@ -1,10 +1,16 @@
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { assertAllowable, findAllowed, resolveExecutable, verifyPinned } from './policy.ts';
+import type { AccessGate } from './approve.ts';
+import { assertAllowable, findAllowed, pinExecutable, resolveExecutable, verifyPinned } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
 import type { VaultStore } from './store.ts';
-import { syncedSecrets } from './secrets.ts';
+import { changeAllowed, syncedSecrets } from './secrets.ts';
+
+export interface RunOptions {
+  /** Asks the user about secrets not allowed for the program; without it they are refused. */
+  gate?: AccessGate;
+}
 
 export interface RunRequest {
   command: string;
@@ -30,7 +36,7 @@ function clip(text: string): [string, boolean] {
   return text.length > MAX_CHARS ? [text.slice(0, MAX_CHARS), true] : [text, false];
 }
 
-export async function runWithSecrets(store: VaultStore, request: RunRequest): Promise<RunResult> {
+export async function runWithSecrets(store: VaultStore, request: RunRequest, options: RunOptions = {}): Promise<RunResult> {
   if (!request.secrets.length) throw new Error('Name at least one secret to inject.');
   const path = resolveExecutable(request.command);
   assertAllowable(path);
@@ -48,11 +54,28 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest): Pr
     return { name, allowed: findAllowed(bound, path) };
   });
   const denied = grants.filter((g) => !g.allowed).map((g) => g.name);
-  if (denied.length)
-    throw new Error(
-      `${denied.join(', ')} may not be used with ${path}. Only the user can allow it, by running: ` +
-        denied.map((name) => `keyhop allow ${name} ${request.command}`).join(' && ')
+  if (denied.length) {
+    const hint =
+      `Only the user can allow it, by running: ` +
+      denied.map((name) => `keyhop allow ${name} ${request.command}`).join(' && ');
+    if (!options.gate) throw new Error(`${denied.join(', ')} may not be used with ${path}. ${hint}`);
+    // Pin now, so the file the user approves is the file that runs.
+    const pinned = await pinExecutable(path);
+    const outcome = await options.gate.ask(
+      { secrets: denied, executable: pinned.realPath, args: request.args, cwd },
+      () => store.confirm('grant')
     );
+    if (outcome === 'busy') throw new Error('Another access request is waiting for the user. Try again once they answer.');
+    if (outcome === 'cooling')
+      throw new Error(`The user recently denied an access request, so keyhop won't ask again yet. ${hint}`);
+    if (outcome === 'deny') throw new Error(`The user denied ${denied.join(', ')} for ${path}.`);
+    if (outcome === 'always')
+      await changeAllowed(
+        store,
+        Object.fromEntries(denied.map((name) => [name, { add: [pinned], bindTo: vault.secrets[name]!.origin }]))
+      );
+    for (const grant of grants) grant.allowed ??= pinned;
+  }
   // Same file as when allowed; run the verified real path so a symlink swap can't redirect it.
   let executable = path;
   for (const grant of grants) executable = await verifyPinned(path, grant.allowed!, grant.name);

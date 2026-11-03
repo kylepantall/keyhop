@@ -51,8 +51,8 @@ export function resolveAllowed(commands: string[]): string[] {
 }
 
 export interface AllowChange {
-  /** Absolute paths to pin and allow. */
-  add?: string[];
+  /** Absolute paths to pin and allow, or entries already pinned (when the user approved that exact file). */
+  add?: (string | AllowedExecutable)[];
   /** Paths (as allowed, or their real paths) to take away. */
   remove?: string[];
   /** Origin to bind the rules to when the secret is not synced yet (its ref). */
@@ -69,7 +69,10 @@ export async function changeAllowed(
   const pinned = new Map<string, AllowedExecutable>();
   for (const [name, change] of Object.entries(changes)) {
     assertName(name);
-    for (const path of change.add ?? []) if (!pinned.has(path)) pinned.set(path, await pinExecutable(path));
+    for (const entry of change.add ?? []) {
+      if (typeof entry !== 'string') pinned.set(entry.path, entry);
+      else if (!pinned.has(entry)) pinned.set(entry, await pinExecutable(entry));
+    }
   }
   return store.update('change', (vault) => {
     const result: Record<string, string[]> = {};
@@ -86,8 +89,11 @@ export async function changeAllowed(
       // Rules granted for another origin don't carry over.
       const kept = current && current.boundTo === origin ? current.allow : [];
       const removing = new Set(change.remove ?? []);
-      const allow = kept.filter((e) => !removing.has(e.path) && !removing.has(e.realPath) && !change.add?.includes(e.path));
-      for (const path of change.add ?? []) allow.push(pinned.get(path)!);
+      const adding = (change.add ?? []).map((entry) => pinned.get(typeof entry === 'string' ? entry : entry.path)!);
+      const allow = kept.filter(
+        (e) => !removing.has(e.path) && !removing.has(e.realPath) && !adding.some((a) => a.path === e.path)
+      );
+      allow.push(...adding);
       allow.sort((a, b) => a.path.localeCompare(b.path));
       vault.policy[name] = { allow, boundTo: origin };
       result[name] = allow.map((e) => e.path);

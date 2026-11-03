@@ -1,13 +1,24 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Root of this checkout or install (holds src/, native/). */
 export const appRoot = fileURLToPath(new URL('..', import.meta.url));
 
 export const REPO = process.env.KEYHOP_REPO ?? 'kylepantall/keyhop';
+
+/**
+ * Full paths to Windows system programs. Windows searches the working
+ * directory before PATH, so a bare `powershell.exe` could run a planted copy.
+ */
+export function windowsSystem(program: 'powershell.exe' | 'cmd.exe' | 'taskkill.exe'): string {
+  const system32 = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
+  return program === 'powershell.exe'
+    ? win32.join(system32, 'WindowsPowerShell', 'v1.0', program)
+    : win32.join(system32, program);
+}
 
 export function dataDir(): string {
   if (process.env.KEYHOP_HOME) return process.env.KEYHOP_HOME;

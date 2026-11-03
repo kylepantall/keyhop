@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { saveConfig, unlockMs } from '../src/config.ts';
+import { windowsSystem } from '../src/paths.ts';
 import { changeAllowed, summarize, syncVault, syncedSecrets } from '../src/secrets.ts';
 import { compareSteps, interpreterFor, listScripts, parseStepOutput, planSteps } from '../src/sync.ts';
 import { newStore, tempHome } from './support.ts';
@@ -57,7 +58,7 @@ describe('step order', () => {
 
   test('picks interpreters by extension', () => {
     expect(interpreterFor('/x/a.mjs')).toEqual({ command: process.execPath, args: ['/x/a.mjs'] });
-    expect(interpreterFor('C:\\a.ps1', 'win32')).toMatchObject({ command: 'powershell.exe' });
+    expect(interpreterFor('C:\\a.ps1', 'win32')).toMatchObject({ command: windowsSystem('powershell.exe') });
     expect(interpreterFor('/x/a.cmd', 'darwin')).toHaveProperty('error');
     expect(interpreterFor('/x/a.exe', 'darwin')).toHaveProperty('error');
   });

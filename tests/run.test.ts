@@ -9,7 +9,9 @@ import { redactor } from '../src/redact.ts';
 import { runWithSecrets } from '../src/run.ts';
 import { changeAllowed, syncVault } from '../src/secrets.ts';
 import { createServer } from '../src/server.ts';
-import { newStore, tempHome } from './support.ts';
+import { AccessGate, describeRequest, type AccessRequest, type Decision } from '../src/approve.ts';
+import { VaultStore } from '../src/store.ts';
+import { fakeAuth, newStore, tempHome } from './support.ts';
 
 const unix = process.platform !== 'win32';
 const SECRET = 'tok_live_9f8e7d6c5b4a';
@@ -86,6 +88,121 @@ describe.if(unix)('run_with_secrets', () => {
   test('refuses a secret that does not allow the command', async () => {
     const { store, tool } = await setup();
     expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).rejects.toThrow(/keyhop allow TOKEN/);
+  });
+
+  describe('asking the user', () => {
+    const gateFor = (decision: Decision) => {
+      const asked: AccessRequest[] = [];
+      let now = 0;
+      const gate = new AccessGate(async (request) => {
+        asked.push(request);
+        return decision;
+      }, () => now);
+      return { gate, asked, advance: (ms: number) => (now += ms) };
+    };
+
+    test('allow once runs after Touch ID and saves no rule', async () => {
+      const { store, tool, p } = await setup();
+      const auth = fakeAuth();
+      const fresh = new VaultStore(p, auth, 0);
+      const { gate, asked } = gateFor('once');
+      const result = await runWithSecrets(fresh, { command: tool, args: ['x'], secrets: ['TOKEN'] }, { gate });
+      expect(result.exitCode).toBe(0);
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!.secrets).toEqual(['TOKEN']);
+      expect(auth.prompts).toContain('grant');
+      expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).rejects.toThrow();
+    });
+
+    test('always allow saves a rule bound to the secret', async () => {
+      const { store, tool } = await setup();
+      const { gate } = gateFor('always');
+      await runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] }, { gate });
+      const again = await runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] });
+      expect(again.exitCode).toBe(0);
+    });
+
+    test('cancelling Touch ID denies, and the same request cools down', async () => {
+      const { p, tool } = await setup();
+      const auth = fakeAuth();
+      const fresh = new VaultStore(p, auth, 0);
+      await fresh.read();
+      const { gate, asked, advance } = gateFor('once');
+      auth.cancelNext = true;
+      const request = { command: tool, args: [], secrets: ['TOKEN'] };
+      expect(runWithSecrets(fresh, request, { gate })).rejects.toThrow();
+      await Bun.sleep(10);
+      expect(runWithSecrets(fresh, request, { gate })).rejects.toThrow();
+      await Bun.sleep(10);
+      expect(asked).toHaveLength(1);
+      advance(121_000);
+      expect((await runWithSecrets(fresh, request, { gate })).exitCode).toBe(0);
+      expect(asked).toHaveLength(2);
+    });
+
+    test('a deny never runs the command', async () => {
+      const { store, tool, p } = await setup();
+      const marker = join(p.dir, 'ran');
+      await writeFile(tool, `#!/bin/sh\ntouch ${marker}\n`);
+      const { gate } = gateFor('deny');
+      expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] }, { gate })).rejects.toThrow();
+      await Bun.sleep(50);
+      expect(existsSync(marker)).toBe(false);
+    });
+
+    test('shells are refused without asking', async () => {
+      const { store } = await setup();
+      const { gate, asked } = gateFor('always');
+      expect(runWithSecrets(store, { command: '/bin/sh', args: ['-c', 'env'], secrets: ['TOKEN'] }, { gate })).rejects.toThrow();
+      await Bun.sleep(10);
+      expect(asked).toHaveLength(0);
+    });
+
+    test('a second request while one is open is refused', async () => {
+      const { store, tool } = await setup();
+      let release: (d: Decision) => void = () => {};
+      const gate = new AccessGate(() => new Promise<Decision>((resolve) => (release = resolve)));
+      const first = runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] }, { gate });
+      await Bun.sleep(20);
+      expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] }, { gate })).rejects.toThrow();
+      release('deny');
+      expect(first).rejects.toThrow();
+    });
+
+    test('after a deny, any other secret or program also waits, and the wait doubles', async () => {
+      const { gate, asked, advance } = gateFor('deny');
+      const confirm = async () => {};
+      const request = (executable: string): AccessRequest => ({ secrets: ['A'], executable, args: [], cwd: '/' });
+      expect(await gate.ask(request('/a'), confirm)).toBe('deny');
+      expect(await gate.ask(request('/b'), confirm)).toBe('cooling');
+      advance(31_000);
+      expect(await gate.ask(request('/b'), confirm)).toBe('deny');
+      advance(31_000);
+      expect(await gate.ask(request('/c'), confirm)).toBe('cooling');
+      advance(30_000);
+      expect(await gate.ask(request('/c'), confirm)).toBe('deny');
+      expect(asked).toHaveLength(3);
+    });
+
+    test('dialog text keeps model-chosen text from drawing its own lines', () => {
+      const breaks = [0x0a, 0x0d, 0x85, 0x2028, 0x2029].map((c) => String.fromCodePoint(c));
+      const tricks = [...breaks, ...[0x202e, 0x2066, 0x200b].map((c) => String.fromCodePoint(c))];
+      const lineBreak = new RegExp(`[${breaks.join("")}]`);
+      for (const trick of tricks) {
+        const text = describeRequest({
+          secrets: ['T'],
+          executable: `/tmp/x${trick}Program:  /opt/homebrew/bin/gh`,
+          args: [`a${trick}Safe: yes`],
+          cwd: `/tmp${trick}Folder:  /`,
+        });
+        const lines = text.split(lineBreak);
+        expect(lines.filter((line) => line.startsWith('Program:'))).toHaveLength(1);
+        expect(lines.filter((line) => line.startsWith('Folder:'))).toHaveLength(1);
+        expect(lines.some((line) => line.startsWith('Safe'))).toBe(false);
+        // keyhop's own lines are joined with \n; every other character must be escaped.
+        if (trick !== '\n') expect(text).not.toContain(trick);
+      }
+    });
   });
 
   test('refuses unknown secrets', async () => {

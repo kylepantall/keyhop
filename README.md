@@ -85,13 +85,25 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 | `sync_secrets` | Steps run and counts |
 | `lock_vault` | Forgets the key until the next prompt |
 
+### When a secret isn't allowed
+
+If Claude runs a program a secret isn't allowed for, keyhop asks you directly in a dialog showing the secrets, the real program path, its arguments and the folder:
+
+| Button | Then |
+|---|---|
+| Deny | Refused. No request can ask again for 30 s, doubling with each deny (up to 15 min) until you approve one |
+| Allow once | Touch ID / Hello, then this run only; nothing saved |
+| Always allow | Touch ID / Hello, then saved like `keyhop allow` (any arguments, this exact file) |
+
+Shells and interpreters are still refused without asking, and only one request can be open at a time. Line breaks and invisible or right-to-left characters in the path, folder or arguments are shown as `\u{…}`, and a program outside system and package-manager folders gets a ⚠️ warning. Turn the dialog off with `"askForAccess": false` in `config.json`.
+
 ## How it keeps values from Claude
 
 | Guard | Detail |
 |---|---|
 | Hardware-bound key | macOS: a Secure Enclave key, used only after Touch ID. Windows: a Windows Hello key signs a challenge. Copying the files to another machine gets nothing. |
 | Encrypted vault | AES-256-GCM. The access rules live inside it, so editing a config file can't widen them. |
-| Per-secret allowlist | A secret is only injected into executables you allowed. Each is pinned by real path and SHA-256, so a swapped binary or symlink is refused (re-allow after upgrading a tool). Shells and interpreters (`bash`, `node`, `python3.12`, `env`…) are refused. |
+| Per-secret allowlist | A secret is only injected into executables you allowed, ahead of time or in the access dialog (which always needs a fresh Touch ID / Hello). Each is pinned by real path and SHA-256, so a swapped binary or symlink is refused (re-allow after upgrading a tool). Shells and interpreters (`bash`, `node`, `python3.12`, `env`…) are refused. |
 | Bound to its source | Rules are tied to the exact ref or script content that filled the name. Editing `config.json` or a `sync.d` script, or overriding the name from another step, clears them. |
 | No shell | `run_with_secrets` runs the program directly, so `$TOKEN` in an argument is never expanded. |
 | Redaction | Values, plus their base64, hex and URL-encoded forms, are scrubbed from output. |
@@ -105,6 +117,7 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 | Endpoint flags | `--registry`, `--hostname`, `--endpoint-url` can send a token elsewhere |
 | Tools that run code | git hooks, `npm run`, `make`: only allow tools you'd trust with the key |
 | Prompts can be triggered by any process running as you | Don't approve a Touch ID / Hello prompt you didn't expect. Windows Hello shows the same prompt for unlocks and rule changes |
+| Programs in folders you can write to | A file swapped between keyhop's hash check and launch runs with the secret. Be wary of allowing programs Claude could have written |
 | The install folder is yours to write | A process running as you could patch keyhop itself, then wait for your next unlock |
 
 ## Develop

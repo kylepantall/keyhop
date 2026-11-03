@@ -12,6 +12,7 @@ import { extname, join } from 'node:path';
 import { assertName } from './config.ts';
 import { readVaults } from './onepassword.ts';
 import { readSecret, providerFor } from './providers.ts';
+import { windowsSystem } from './paths.ts';
 import { hashFile } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
@@ -67,7 +68,7 @@ export function interpreterFor(
     }
     case '.ps1':
       return windows
-        ? { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file] }
+        ? { command: windowsSystem('powershell.exe'), args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file] }
         : { command: 'pwsh', args: ['-NoProfile', '-NonInteractive', '-File', file] };
     case '.js':
     case '.mjs':
@@ -78,7 +79,7 @@ export function interpreterFor(
       return { command: windows ? 'python' : 'python3', args: [file] };
     case '.cmd':
     case '.bat':
-      return windows ? { command: 'cmd.exe', args: ['/d', '/c', file] } : { error: 'Windows only' };
+      return windows ? { command: windowsSystem('cmd.exe'), args: ['/d', '/c', file] } : { error: 'Windows only' };
     case '':
       return windows ? { error: 'add an extension (.ps1, .cmd, .mjs …)' } : { command: file, args: [] };
     default:

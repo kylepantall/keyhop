@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { REPO } from './paths.ts';
+import { REPO, windowsSystem } from './paths.ts';
 import { VERSION } from './version.ts';
 
 const REF = /^[A-Za-z0-9._/-]+$/;
@@ -85,7 +85,7 @@ export async function runUpdateCommand(args: string[]): Promise<number> {
     const script = join(dir, windows ? 'install.ps1' : 'install.sh');
     await writeFile(script, await fetchText(raw(ref, `scripts/${windows ? 'install.ps1' : 'install.sh'}`)));
     const [command, argv] = windows
-      ? ['powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Ref', ref]]
+      ? [windowsSystem('powershell.exe'), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, '-Ref', ref]]
       : ['bash', [script, ref]];
     const code = await new Promise<number>((resolve, reject) => {
       const child = spawn(command, argv as string[], { stdio: 'inherit' });
