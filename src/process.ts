@@ -23,6 +23,13 @@ export interface ProcessOptions {
    * exits or times out, so no descendant keeps injected secrets running.
    */
   killTree?: boolean;
+  /**
+   * Values written to extra inherited pipes, fd 3, 4 … (read as /dev/fd/3 …).
+   * macOS/Linux only; no other process can open them.
+   */
+  extraInputs?: string[];
+  /** Called with the child's pid right after it starts. */
+  onSpawn?: (pid: number) => void;
 }
 
 /** After exit, how long to wait for descendants still holding the pipes. */
@@ -48,8 +55,14 @@ export function runProcess(command: string, args: string[], options: ProcessOpti
       shell: false,
       windowsHide: true,
       detached: !!options.killTree && process.platform !== 'win32',
-      stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      stdio: [
+        options.input === undefined ? 'ignore' : 'pipe',
+        'pipe',
+        'pipe',
+        ...(options.extraInputs ?? []).map(() => 'pipe' as const),
+      ],
     });
+    if (child.pid) options.onSpawn?.(child.pid);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const size = { out: 0, err: 0 };
@@ -105,6 +118,13 @@ export function runProcess(command: string, args: string[], options: ProcessOpti
       drain = setTimeout(finish, DRAIN_MS);
     });
     child.on('close', finish);
-    if (options.input !== undefined) child.stdin!.end(options.input);
+    // A program may exit without reading its input; that EPIPE must not crash keyhop.
+    const feed = (stream: NodeJS.WritableStream | null | undefined, value: string) => {
+      if (!stream) return;
+      stream.on('error', () => undefined);
+      stream.end(value);
+    };
+    if (options.input !== undefined) feed(child.stdin, options.input);
+    (options.extraInputs ?? []).forEach((value, i) => feed(child.stdio[3 + i] as NodeJS.WritableStream, value));
   });
 }

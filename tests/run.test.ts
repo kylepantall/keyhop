@@ -8,10 +8,11 @@ import { assertName } from '../src/config.ts';
 import { assertAllowable, findAllowed, resolveExecutable } from '../src/policy.ts';
 import { redactor } from '../src/redact.ts';
 import { runWithSecrets } from '../src/run.ts';
-import { changeAllowed, syncVault } from '../src/secrets.ts';
+import { changeAllowed, summarize, syncVault } from '../src/secrets.ts';
 import { createServer } from '../src/server.ts';
 import { AccessGate, describeRequest, type AccessRequest, type Decision } from '../src/approve.ts';
 import { VaultStore } from '../src/store.ts';
+import type { Delivery } from '../src/types.ts';
 import { fakeAuth, newStore, tempHome } from './support.ts';
 
 const unix = process.platform !== 'win32';
@@ -109,6 +110,96 @@ describe.if(unix)('run_with_secrets', () => {
   test('refuses a secret that does not allow the command', async () => {
     const { store, tool } = await setup();
     expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).rejects.toThrow(/keyhop allow TOKEN/);
+  });
+
+  describe('other ways to hand over a secret', () => {
+    async function withTool(script: string, as: Delivery[]) {
+      const ctx = await setup();
+      const tool = join(ctx.p.dir, 'reader');
+      await writeFile(tool, `#!/bin/sh\n${script}\n`);
+      await chmod(tool, 0o755);
+      await changeAllowed(ctx.store, { TOKEN: { add: [tool], as } });
+      return { ...ctx, tool };
+    }
+
+    test('{{file:NAME}} is an inherited pipe: reads as the value, once, with no file on disk', async () => {
+      const { store, tool } = await withTool('echo "path=$1 env=${TOKEN:-unset}"; cat "$1"; echo; cat "$1" 2>/dev/null; echo "|"', ['file']);
+      const result = await runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain(SECRET);
+      // A second read gets nothing, so a stray process can't collect it later.
+      expect(result.stdout.match(/\[REDACTED:TOKEN\]/g)).toHaveLength(1);
+      // Only the pipe was used: no environment variable.
+      expect(result.stdout).toContain('env=unset');
+      expect(/path=(\S+)/.exec(result.stdout)![1]).toBe('/dev/fd/3');
+    });
+
+    test('{{file:NAME}} works inside a larger argument', async () => {
+      const { store, tool } = await withTool('echo "$1"', ['file']);
+      const result = await runWithSecrets(store, { command: tool, args: ['ANTHROPIC_KEY=@{{file:TOKEN}}'] });
+      expect(result.stdout.trim()).toBe('ANTHROPIC_KEY=@/dev/fd/3');
+    });
+
+    test('a program that never opens the pipe still finishes promptly', async () => {
+      const { store, tool } = await withTool('exit 0', ['file']);
+      const started = Date.now();
+      await runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] });
+      expect(Date.now() - started).toBeLessThan(3_000);
+    });
+
+    test('stdin gets the value, and a program that ignores it is fine', async () => {
+      const { store, tool } = await withTool('cat', ['stdin']);
+      expect((await runWithSecrets(store, { command: tool, args: [], stdin: 'TOKEN' })).stdout).toBe('[REDACTED:TOKEN]');
+      const quick = await withTool('exit 0', ['stdin']);
+      expect((await runWithSecrets(quick.store, { command: quick.tool, args: [], stdin: 'TOKEN' })).exitCode).toBe(0);
+    });
+
+    test('{{arg:NAME}} needs the arg way granted from the CLI, never the dialog', async () => {
+      const { store, tool } = await withTool('echo "arg=$1"', ['env']);
+      const request = { command: tool, args: ['{{arg:TOKEN}}'] };
+      const asked: AccessRequest[] = [];
+      const gate = new AccessGate(async (r) => {
+        asked.push(r);
+        return 'always';
+      });
+      expect(runWithSecrets(store, request, { gate })).rejects.toThrow(/--as arg/);
+      await Bun.sleep(10);
+      expect(asked).toHaveLength(0);
+      await changeAllowed(store, { TOKEN: { add: [tool], as: ['arg'] } });
+      expect((await runWithSecrets(store, request)).stdout).toContain('arg=[REDACTED:TOKEN]');
+    });
+
+    test('a program allowed for env is not thereby allowed a file or stdin', async () => {
+      const { store, tool } = await withTool('cat "$1"', ['env']);
+      expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).resolves.toBeDefined();
+      expect(runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] })).rejects.toThrow(/--as file/);
+      expect(runWithSecrets(store, { command: tool, args: [], stdin: 'TOKEN' })).rejects.toThrow(/--as stdin/);
+    });
+
+    test('"always allow" in the dialog adds just the ways asked for, keeping the old ones', async () => {
+      const { store, tool } = await withTool('cat "$1"', ['env']);
+      const gate = new AccessGate(async () => 'always');
+      await runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] }, { gate });
+      const [summary] = (await summarize(store)).secrets.filter((s) => s.name === 'TOKEN');
+      expect(summary!.allowedCommands.find((c) => c.path === tool)!.as.sort()).toEqual(['env', 'file']);
+      expect(runWithSecrets(store, { command: tool, args: [], stdin: 'TOKEN' })).rejects.toThrow();
+    });
+
+    test('rules from before modes existed mean environment only', async () => {
+      const { store, tool } = await withTool('cat "$1"', ['env']);
+      await store.update('change', (vault) => {
+        for (const entry of vault.policy.TOKEN!.allow) delete entry.modes;
+      });
+      expect(runWithSecrets(store, { command: tool, args: [], secrets: ['TOKEN'] })).resolves.toBeDefined();
+      expect(runWithSecrets(store, { command: tool, args: ['{{file:TOKEN}}'] })).rejects.toThrow();
+    });
+
+    test('the dialog shows how each secret is handed over', () => {
+      const describe = (delivery: Delivery[]) =>
+        describeRequest({ secrets: ['T'], delivery: { T: delivery }, executable: '/x', args: [], cwd: '/' });
+      const texts = new Set([describe(['env']), describe(['file']), describe(['arg']), describe(['stdin'])]);
+      expect(texts.size).toBe(4);
+    });
   });
 
   describe('asking the user', () => {

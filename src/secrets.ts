@@ -2,7 +2,15 @@ import { assertName, loadConfig } from './config.ts';
 import { assertAllowable, pinExecutable, resolveExecutable } from './policy.ts';
 import type { VaultStore } from './store.ts';
 import { collectSecrets, planSteps } from './sync.ts';
-import type { AllowedExecutable, Progress, SyncCacheState, SyncResult, VaultData } from './types.ts';
+import {
+  allowedModes,
+  type AllowedExecutable,
+  type Delivery,
+  type Progress,
+  type SyncCacheState,
+  type SyncResult,
+  type VaultData,
+} from './types.ts';
 
 export function syncedSecrets(vault: VaultData): Record<string, string> {
   return Object.fromEntries(Object.entries(vault.secrets).map(([name, entry]) => [name, entry.value]));
@@ -69,6 +77,8 @@ export interface AllowChange {
   bindTo?: string;
   /** Delete the secret and its rules. */
   drop?: boolean;
+  /** Ways the added programs may receive it (default env); merged with what they already had. */
+  as?: Delivery[];
 }
 
 /** Adds or removes executables a secret may be injected into. Always prompts. */
@@ -99,7 +109,12 @@ export async function changeAllowed(
       // Rules granted for another origin don't carry over.
       const kept = current && current.boundTo === origin ? current.allow : [];
       const removing = new Set(change.remove ?? []);
-      const adding = (change.add ?? []).map((entry) => pinned.get(typeof entry === 'string' ? entry : entry.path)!);
+      const adding = (change.add ?? []).map((entry) => {
+        const pin = pinned.get(typeof entry === 'string' ? entry : entry.path)!;
+        const before = kept.find((e) => e.path === pin.path && e.sha256 === pin.sha256);
+        const modes = new Set<Delivery>([...(before ? allowedModes(before) : []), ...(change.as?.length ? change.as : ['env' as const])]);
+        return { ...pin, modes: [...modes].sort() };
+      });
       const allow = kept.filter(
         (e) => !removing.has(e.path) && !removing.has(e.realPath) && !adding.some((a) => a.path === e.path)
       );
@@ -116,7 +131,8 @@ export interface SecretSummary {
   name: string;
   source: string;
   updatedAt: string;
-  allowedCommands: string[];
+  /** Programs that may receive it, and how (env, stdin, file, arg). */
+  allowedCommands: { path: string; as: Delivery[] }[];
   description?: string;
 }
 
@@ -129,11 +145,12 @@ export async function summarize(store: VaultStore): Promise<{ syncedAt: string |
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, entry]) => {
         const policy = vault.policy[name];
+        const bound = policy?.boundTo === entry.origin ? policy : undefined;
         return {
           name,
           source: entry.source,
           updatedAt: entry.updatedAt,
-          allowedCommands: policy?.boundTo === entry.origin ? policy.allow.map((e) => e.path) : [],
+          allowedCommands: bound?.allow.map((e) => ({ path: e.path, as: allowedModes(e) })) ?? [],
           description: config.secrets?.[name]?.description,
         };
       }),

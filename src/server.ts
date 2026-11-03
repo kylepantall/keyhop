@@ -27,7 +27,7 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
       instructions:
         'keyhop holds API keys and passwords you can use but never read. Call list_secrets to see names and ' +
         'which commands each may be given to, then run_with_secrets to run one of those commands with the ' +
-        'secrets as environment variables. Output is redacted. Unlocking prompts the user for Touch ID or ' +
+        'secrets as environment variables, on stdin, or as a {{file:NAME}} path. Output is redacted. Unlocking prompts the user for Touch ID or ' +
         'Windows Hello. Only the user can change which commands a secret may be used with: if a secret is ' +
         'not allowed for a program, keyhop may ask the user directly (a dialog plus Touch ID / Windows ' +
         'Hello) and the call waits for their answer. Do not retry a denied request.',
@@ -52,14 +52,24 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
     {
       title: 'Run a command with secrets',
       description:
-        'Runs a program directly (no shell, so $VARS in args are not expanded) with the named secrets set ' +
-        'as environment variables. A secret not allowed for this program (see list_secrets) makes keyhop ' +
-        'ask the user to deny, allow once or always allow; the call waits for them. Secret values and ' +
-        'their common encodings are redacted from stdout/stderr.',
+        'Runs a program directly (no shell, so $VARS in args are not expanded) and hands it secrets in one ' +
+        'of four ways: as environment variables (secrets), on standard input (stdin, e.g. for ' +
+        '`gh secret set`, `wrangler secret put`, `docker login --password-stdin`), as a file path ' +
+        '({{file:NAME}} in an argument becomes the path of a named pipe that reads as the value, e.g. ' +
+        '`ANTHROPIC_KEY=@{{file:ANTHROPIC_KEY}}`; nothing is written to disk), or inside an argument ' +
+        '({{arg:NAME}}; prefer file or stdin). Each program is allowed per secret and per way (list_secrets ' +
+        'shows both as allowedCommands[].as). Anything not yet allowed makes keyhop ask the user to deny, ' +
+        'allow once or always allow, and the call waits for them; arg is never asked, only the user can ' +
+        'grant it from their terminal. A {{file:NAME}} path can be read once, by this program only. Secret ' +
+        'values and their common encodings are redacted from stdout/stderr.',
       inputSchema: {
         command: z.string().min(1).describe('Program name on PATH (gh) or absolute path. Not a shell.'),
-        args: z.array(z.string()).default([]).describe('Arguments, passed as-is.'),
-        secrets: z.array(z.string()).min(1).describe('Secret names to set as environment variables.'),
+        args: z
+          .array(z.string())
+          .default([])
+          .describe('Arguments, passed as-is apart from {{file:NAME}} and {{arg:NAME}} placeholders.'),
+        secrets: z.array(z.string()).default([]).describe('Secret names to set as environment variables.'),
+        stdin: z.string().optional().describe('Secret name whose value is written to standard input.'),
         cwd: z.string().optional().describe('Absolute working directory; defaults to the server cwd.'),
         timeoutSeconds: z.number().int().min(1).max(600).optional().describe('Default 120.'),
       },

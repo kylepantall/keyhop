@@ -62,6 +62,17 @@ export interface AllowedExecutable {
   /** What it resolved to then. */
   realPath: string;
   sha256: string;
+  /**
+   * How this program may receive the secret; absent means ['env']. Each way is
+   * granted on its own: a program trusted with an environment variable could
+   * still upload a file or stdin it is handed (gh gist create, curl -d @file).
+   */
+  modes?: Delivery[];
+}
+
+/** How an allowed program may receive the secret (rules from before modes existed are env only). */
+export function allowedModes(entry: AllowedExecutable): Delivery[] {
+  return entry.modes?.length ? entry.modes : ['env'];
 }
 
 export interface SecretPolicy {
@@ -137,6 +148,10 @@ export interface StepResult {
   step: string;
   count: number;
 }
+
+/** How run_with_secrets hands a secret to a program. */
+export const DELIVERIES = ['env', 'stdin', 'file', 'arg'] as const;
+export type Delivery = (typeof DELIVERIES)[number];
 
 /** Sync progress for a spinner; messages never contain secret values. */
 export type Progress = (message: string) => void;
