@@ -34,10 +34,26 @@ jobs:
         shell: pwsh
         run: |
           ./dist/keyhop/keyhop.exe --version
-          ./dist/keyhop/native/build/keyhop-hello.exe probe
-          if ($LASTEXITCODE -ne 0) { throw 'keyhop-hello probe failed' }
+          ./dist/keyhop/native/build/keyhop-hello.exe selftest | Write-Output
+          if ($LASTEXITCODE -ne 0) { throw 'keyhop-hello selftest failed' }
+          $scripts = Get-ChildItem dist/keyhop -Recurse -Include *.cmd, *.bat, *.ps1, *.vbs
+          if ($scripts) { throw "Scripts in the release: $($scripts.FullName -join ', ')" }
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## $version" '$0 == v {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "CHANGELOG.md has no ## $version section" >&2; exit 1; fi
+          cat >> notes.md <<'NOTES'
+
+          **Windows:** install or update with
+          ```powershell
+          & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.ps1)))
+          ```
+          or `keyhop update`. The installer checks the download against `SHA256SUMS`. macOS installs from source with `install.sh`.
+          NOTES
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME dist/keyhop-windows-x64.zip dist/SHA256SUMS --title $env:GITHUB_REF_NAME --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME dist/keyhop-windows-x64.zip dist/SHA256SUMS --title "keyhop $env:GITHUB_REF_NAME" --notes-file notes.md --verify-tag

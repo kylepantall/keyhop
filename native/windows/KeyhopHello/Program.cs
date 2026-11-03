@@ -1,6 +1,7 @@
 // keyhop-hello.exe: Windows Hello-gated secret and access dialog for keyhop.
 //
 //   keyhop-hello probe                      -> {"helloSupported": bool}
+//   keyhop-hello selftest                   -> checks the WinRT plumbing without a prompt (CI)
 //   keyhop-hello create [--replace]         -> {"peer": b64}
 //   keyhop-hello derive <unlock|change|grant>  stdin {"peer"} -> b64 secret
 //   keyhop-hello ask                        $KEYHOP_ASK_MESSAGE -> deny | once | always
@@ -30,6 +31,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Windows.Security.Credentials;
+using Windows.Security.Cryptography;
 
 namespace Keyhop
 {
@@ -54,6 +56,9 @@ namespace Keyhop
                     case "probe":
                         Console.WriteLine("{\"helloSupported\": " + (Supported() ? "true" : "false") + "}");
                         return 0;
+                    case "selftest":
+                        SelfTest();
+                        return 0;
                     case "create":
                         RequireHello();
                         Console.WriteLine(Create(Array.IndexOf(args, "--replace") >= 0));
@@ -73,7 +78,7 @@ namespace Keyhop
                         ServePipe(args[1]);
                         return 0;
                     default:
-                        throw new ExitException("Usage: keyhop-hello probe | create [--replace] | derive <unlock|change|grant> | ask | pipe <name>");
+                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant> | ask | pipe <name>");
                 }
             }
             catch (ExitException error)
@@ -192,6 +197,18 @@ namespace Keyhop
                     }
                 }) { IsBackground = true }.Start();
             }
+        }
+
+        /// <summary>
+        /// Every WinRT call the Hello path makes, minus the prompt: buffers both ways
+        /// and the async bridge. Lets CI (which has no Hello) check the plumbing.
+        /// </summary>
+        private static void SelfTest()
+        {
+            var hex = CryptographicBuffer.EncodeToHexString(new byte[] { 1, 2, 255 }.AsBuffer());
+            var random = CryptographicBuffer.GenerateRandom(16).ToArray();
+            if (hex != "0102ff" || random.Length != 16) throw new ExitException("WinRT buffer conversion failed.");
+            Console.WriteLine("{\"buffers\": \"ok\", \"helloSupported\": " + (Supported() ? "true" : "false") + "}");
         }
 
         /// <summary>True when pid is root or one of its descendants (walks parent links).</summary>

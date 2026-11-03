@@ -5,7 +5,10 @@
     small and needs no runtime download. WinRT comes from the SDK contracts.
   -->
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- GUI subsystem: no console window flashes when keyhop runs it for a
+         Hello prompt. Redirected stdin/stdout/stderr still work. -->
+    <OutputType>WinExe</OutputType>
+    <DebugType>none</DebugType>
     <TargetFramework>net48</TargetFramework>
     <AssemblyName>keyhop-hello</AssemblyName>
     <RootNamespace>Keyhop</RootNamespace>

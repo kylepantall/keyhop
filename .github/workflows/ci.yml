@@ -48,9 +48,13 @@ jobs:
         shell: pwsh
         run: |
           $app = Resolve-Path dist/keyhop
-          # The Hello helper loads WinRT; CI runners have no Hello, so it reports false.
-          & "$app/native/build/keyhop-hello.exe" probe
-          if ($LASTEXITCODE -ne 0) { throw 'keyhop-hello probe failed' }
+          # Every WinRT call the Hello path makes, minus the prompt (runners have no Hello).
+          # The helper is a GUI-subsystem exe: piping its output makes PowerShell wait for it.
+          & "$app/native/build/keyhop-hello.exe" selftest | Write-Output
+          if ($LASTEXITCODE -ne 0) { throw 'keyhop-hello selftest failed' }
+          # Nothing that antivirus flags as a script launcher ships in the release.
+          $scripts = Get-ChildItem $app -Recurse -Include *.cmd, *.bat, *.ps1, *.vbs
+          if ($scripts) { throw "Scripts in the release: $($scripts.FullName -join ', ')" }
           & "$app/keyhop.exe" --version
           if ($LASTEXITCODE -ne 0) { throw 'keyhop.exe --version failed' }
           # doctor finds the helper next to the compiled exe.
