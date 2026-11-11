@@ -121,7 +121,7 @@ Apps in the hop suite (vpnhop, hopsql) keep their own secrets in keyhop. Each is
 | | |
 |---|---|
 | Pinned | Runtime real path + SHA-256, entry real path (inside the root), root tree hash: SHA-256 over sorted `relpath NUL sha256 NUL`, `node_modules` included. No symlinks; no world-writable root |
-| Verified per call, before any prompt | Parent's executable (`lsof`), argv exactly `<runtime> <entry> …` (kernel argv, no flags first), no `NODE_OPTIONS`, `NODE_PATH`, `BUN_OPTIONS`, `BUN_INSPECT*`, `DYLD_*`, `LD_*`, readable environment, tree unchanged. Bun runtimes: no `bunfig.toml` in the working folder (outside the root) or home |
+| Verified per call, before any prompt | Parent's executable (`lsof`), argv exactly `<runtime> <entry> …` (kernel argv, no flags first), no `NODE_*`/`BUN_*` variables except `NODE_ENV`, `NODE_NO_WARNINGS`, `NODE_DISABLE_COLORS`, no `DYLD_*`/`LD_*`, readable environment, working folder inside the root (client launchers `cd` there), tree unchanged. Bun runtimes: no `bunfig.toml` in home |
 | Own names | Names starting with the prefix (`VPNHOP_`): read after Touch ID, written after Touch ID |
 | Other names | Dialog with the client, names and purpose, then Touch ID. "Always allow" is saved per client and bound to the secret's source |
 | Sync | Entries written by clients (source `client:NAME`) survive `keyhop sync` |

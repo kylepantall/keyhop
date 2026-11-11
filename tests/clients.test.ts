@@ -150,8 +150,8 @@ describe('process inspection helpers', () => {
 
   test('flags code-injecting variables only', () => {
     expect(
-      injectingVariables(['PATH=/bin', 'NODE_OPTIONS=--require x', 'NODE_PATH=/x', 'BUN_OPTIONS=--preload x', 'DYLD_INSERT_LIBRARIES=x', 'LD_PRELOAD=x', 'NODE_ENV=test'])
-    ).toEqual(['NODE_OPTIONS', 'NODE_PATH', 'BUN_OPTIONS', 'DYLD_INSERT_LIBRARIES', 'LD_PRELOAD']);
+      injectingVariables(['PATH=/bin', 'NODE_OPTIONS=--require x', 'NODE_PATH=/x', 'BUN_OPTIONS=--preload x', 'DYLD_INSERT_LIBRARIES=x', 'LD_PRELOAD=x', 'NODE_ENV=test', 'NODE_NO_WARNINGS=1', 'NODE_V8_COVERAGE=/tmp/c', 'NODE_FUTURE_VAR=1', 'BUN_CONFIG_X=1'])
+    ).toEqual(['NODE_OPTIONS', 'NODE_PATH', 'BUN_OPTIONS', 'DYLD_INSERT_LIBRARIES', 'LD_PRELOAD', 'NODE_V8_COVERAGE', 'NODE_FUTURE_VAR', 'BUN_CONFIG_X']);
   });
 });
 
@@ -211,19 +211,34 @@ describe.if(unix)('parent verification', () => {
     expect(await check(f, inspectorFor(f), pin)).toBe('root');
   });
 
-  test('a bun runtime may not start in a folder with bunfig.toml outside the root', async () => {
+  test('the caller must run from inside its root (runtimes read config from the working directory)', async () => {
+    const f = await fixture();
+    const project = join(f.p.dir, 'project');
+    await mkdir(project);
+    expect(await check(f, inspectorFor(f, { cwd: f.root }))).toBe('ok');
+    expect(await check(f, inspectorFor(f, { cwd: project }))).toBe('root');
+    expect(await check(f, inspectorFor(f, { cwd: null }))).toBe('root');
+  });
+
+  test('a bun runtime is refused while a home bunfig could preload code', async () => {
     const f = await fixture();
     const bun = join(f.p.dir, 'bin', 'bun');
     await writeFile(bun, 'fake node binary');
     const pin = await pinFor(f);
     pin.runtime = { ...pin.runtime, path: bun, realPath: realpathSync(bun) };
-    const project = join(f.p.dir, 'project');
-    await mkdir(project);
-    const bunInspector = (cwd: string) => inspectorFor(f, { executable: pin.runtime.realPath, argv: ['bun', f.entry], cwd });
-    expect(await check(f, bunInspector(project), pin)).toBe('ok');
-    await writeFile(join(project, 'bunfig.toml'), 'preload = ["./evil.ts"]');
-    expect(await check(f, bunInspector(project), pin)).toBe('bunfig');
-    expect(await check(f, inspectorFor(f, { executable: pin.runtime.realPath, argv: ['bun', f.entry], cwd: null }), pin)).toBe('bunfig');
+    const bunInspector = inspectorFor(f, { executable: pin.runtime.realPath, argv: ['bun', f.entry], cwd: f.root });
+    expect(await check(f, bunInspector, pin)).toBe('ok');
+    const xdg = join(f.p.dir, 'xdg');
+    await mkdir(xdg);
+    await writeFile(join(xdg, '.bunfig.toml'), 'preload = ["./evil.ts"]');
+    const before = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdg;
+    try {
+      expect(await check(f, bunInspector, pin)).toBe('bunfig');
+    } finally {
+      if (before === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = before;
+    }
   });
 });
 

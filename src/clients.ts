@@ -157,7 +157,7 @@ export function describeGrant(name: string, pin: ClientPin, names: string[], pur
   return [
     `The keyhop suite client "${name}" wants secrets outside its own ${pin.prefix} names:`,
     '',
-    `Secrets:  ${names.join(', ')}`,
+    `Secrets:  ${inert(names.join(', '), MAX_PATH_CHARS)}`,
     `Purpose:  "${inert(purpose, MAX_PURPOSE)}"`,
     `Program:  "${inert(pin.entry.realPath, MAX_PATH_CHARS)}"`,
     '',

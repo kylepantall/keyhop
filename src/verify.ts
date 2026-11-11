@@ -38,11 +38,18 @@ export class VerifyError extends Error {
   }
 }
 
-/** Variables that load code into node or bun, or into any program via the dynamic loader. */
-const INJECTING = /^(NODE_OPTIONS|NODE_PATH|BUN_OPTIONS|BUN_INSPECT.*|DYLD_.*|LD_.*)$/;
+/**
+ * Variables that can change what code node or bun runs (or that the dynamic loader loads).
+ * NODE_* and BUN_* are refused unless known to be harmless: new runtime variables appear
+ * every release, so an allowlist ages better than a blocklist.
+ */
+const RUNTIME_VARIABLE = /^(NODE_|BUN_|DYLD_|LD_)/;
+const HARMLESS = new Set(['NODE_ENV', 'NODE_NO_WARNINGS', 'NODE_DISABLE_COLORS']);
 
 export function injectingVariables(env: string[]): string[] {
-  return env.map((entry) => entry.slice(0, Math.max(entry.indexOf('='), 0)) || entry).filter((name) => INJECTING.test(name));
+  return env
+    .map((entry) => entry.slice(0, Math.max(entry.indexOf('='), 0)) || entry)
+    .filter((name) => RUNTIME_VARIABLE.test(name) && !HARMLESS.has(name));
 }
 
 function isWithin(path: string, dir: string): boolean {
@@ -133,14 +140,18 @@ export async function verifyParent(
   const injecting = injectingVariables(env);
   if (injecting.length) throw new VerifyError('environment', `the caller has ${injecting.join(', ')} set.`);
 
-  // Bun preloads code named in bunfig.toml from the working directory or home.
+  // Runtimes read config from the working directory (bunfig.toml, .env, future config files),
+  // so the client must run from inside its pinned root (launchers cd there, as keyhop's does).
+  const cwd = await inspector.cwd(pid);
+  if (!cwd) throw new VerifyError('root', "the caller's working directory can't be read.");
+  const realCwd = realOrNull(cwd) ?? cwd;
+  if (!isWithin(realCwd, pin.root.realPath))
+    throw new VerifyError('root', `the caller must run from inside ${pin.root.realPath} (it runs from ${realCwd}).`);
+
+  // Bun also preloads code named in a bunfig.toml in home.
   if (/^bun/i.test(basename(pin.runtime.realPath))) {
-    const cwd = await inspector.cwd(pid);
-    if (!cwd) throw new VerifyError('bunfig', "the caller's working directory can't be read.");
-    const realCwd = realOrNull(cwd) ?? cwd;
     const config = process.env.XDG_CONFIG_HOME;
     const found = [
-      ...(isWithin(realCwd, pin.root.realPath) ? [] : [join(realCwd, 'bunfig.toml')]),
       join(homedir(), '.bunfig.toml'),
       ...(config ? [join(config, '.bunfig.toml')] : []),
     ].filter((file) => existsSync(file));
