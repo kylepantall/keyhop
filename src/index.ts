@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import * as ui from '@clack/prompts';
+import { platformDialog } from './approve.ts';
 import { platformAuthenticator } from './auth.ts';
+import { runClient } from './clients.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { runDoctor } from './doctor.ts';
 import { paths } from './paths.ts';
@@ -9,8 +11,10 @@ import { changeAllowed, resolveAllowed, summarize, syncVault } from './secrets.t
 import { serve } from './server.ts';
 import { runSetup } from './setup.ts';
 import { VaultStore } from './store.ts';
+import { testDialog, testSeamEnabled } from './testauth.ts';
 import { DELIVERIES, type Delivery } from './types.ts';
 import { runUpdateCommand } from './update.ts';
+import { systemInspector } from './verify.ts';
 import { VERSION } from './version.ts';
 
 const HELP = `keyhop ${VERSION} — secrets Claude can use but never read
@@ -29,6 +33,12 @@ Usage: keyhop <command>
                                 environment variable. arg puts the value in its command line, where
                                 the process list shows it
   deny NAME COMMAND...          Take that back
+  client add NAME --runtime PATH --entry PATH --root DIR [--prefix PREFIX_]
+                                Pin a suite client (vpnhop, hopsql …) so it may read and write
+                                secrets starting with its prefix (dialog + Touch ID)
+  client list [--json]          Show suite clients
+  client remove NAME            Unpin a suite client (its secrets stay)
+  client get | put              For suite clients: JSON on stdin, JSON on stdout
   doctor [--json]               Check biometrics, vault, tools, scripts and Claude Code
   update [--check] [--ref R]    Install the latest version from GitHub
   serve                         Run the MCP server (stdio); Claude Code starts this
@@ -39,6 +49,18 @@ Sync scripts: put them in the sync.d folder (see keyhop doctor); they run in num
 function store(): VaultStore {
   // CLI processes are short-lived; keep the key for the whole command.
   return new VaultStore(paths(), platformAuthenticator(), 0);
+}
+
+/** All of stdin, up to 64 MiB. */
+async function readStdin(max = 64 * 1024 * 1024): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > max) throw new Error('stdin is too large.');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 function option(args: string[], name: string): string | undefined {
@@ -72,6 +94,23 @@ async function main(argv: string[]): Promise<number> {
       return runDoctor(paths(), args);
     case 'update':
       return runUpdateCommand(args);
+    case 'client':
+      return runClient(
+        args,
+        {
+          store: store(),
+          dialog: testSeamEnabled() ? testDialog() : platformDialog(),
+          inspector: systemInspector(),
+          // The launcher execs its runtime, so the parent is the calling client.
+          ppid: process.ppid,
+          platform: process.platform,
+        },
+        {
+          stdin: readStdin,
+          stdout: (text) => process.stdout.write(text),
+          stderr: (text) => process.stderr.write(text),
+        }
+      );
     case 'sync': {
       // A spinner only on a terminal; piped output stays plain.
       const spinner = process.stdout.isTTY ? ui.spinner() : null;

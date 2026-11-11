@@ -12,12 +12,18 @@ import {
   type VaultData,
 } from './types.ts';
 
+/** Entries a suite client wrote with keyhop client put (source `client:<name>`). */
+export function isClientSource(source: string): boolean {
+  return source.startsWith('client:');
+}
+
 export function syncedSecrets(vault: VaultData): Record<string, string> {
   return Object.fromEntries(Object.entries(vault.secrets).map(([name, entry]) => [name, entry.value]));
 }
 
 /**
- * Runs every sync step, then replaces the vault's secrets with the result.
+ * Runs every sync step, then replaces the vault's secrets with the result,
+ * keeping entries suite clients wrote (source `client:*`).
  * Access rules survive a name disappearing, but are cleared when a name comes
  * back from a different origin (another ref, or an edited script).
  */
@@ -36,23 +42,32 @@ export async function syncVault(
   const collected = await collectSecrets(steps, onProgress);
   const now = new Date().toISOString();
   onProgress?.(`Saving ${Object.keys(collected.values).length} secret(s) to the vault`);
+  const spoofing = Object.values(collected.values).find((entry) => isClientSource(entry.source));
+  if (spoofing) throw new Error(`Sync step ${spoofing.source} has a name reserved for suite clients; rename it.`);
   return store.update('unlock', (vault) => {
-    const removed = Object.keys(vault.secrets).filter((name) => !collected.values[name]);
+    // Suite clients write their own entries (keyhop client put); sync never replaces or removes them.
+    const clientOwned = Object.entries(vault.secrets).filter(([, entry]) => isClientSource(entry.source));
+    const owned = new Set(clientOwned.map(([name]) => name));
+    const removed = Object.keys(vault.secrets).filter((name) => !collected.values[name] && !owned.has(name));
     const rulesCleared: string[] = [];
     for (const [name, { origin }] of Object.entries(collected.values)) {
+      if (owned.has(name)) continue;
       const policy = vault.policy[name];
       if (policy?.allow.length && policy.boundTo !== origin) {
         vault.policy[name] = { allow: [] };
         rulesCleared.push(name);
       }
     }
-    vault.secrets = Object.fromEntries(
-      Object.entries(collected.values).map(([name, { value, source, origin }]) => {
-        const previous = vault.secrets[name];
-        const unchanged = previous?.value === value && previous.origin === origin;
-        return [name, { value, source, origin, updatedAt: unchanged ? previous.updatedAt : now }];
-      })
-    );
+    vault.secrets = Object.fromEntries([
+      ...Object.entries(collected.values)
+        .filter(([name]) => !owned.has(name))
+        .map(([name, { value, source, origin }]) => {
+          const previous = vault.secrets[name];
+          const unchanged = previous?.value === value && previous.origin === origin;
+          return [name, { value, source, origin, updatedAt: unchanged ? previous.updatedAt : now }] as const;
+        }),
+      ...clientOwned,
+    ]);
     vault.syncedAt = now;
     vault.cache = cache.next;
     return { steps: collected.steps, total: Object.keys(vault.secrets).length, removed, rulesCleared };

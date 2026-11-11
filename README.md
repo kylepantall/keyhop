@@ -43,6 +43,9 @@ On a first install the installer starts `keyhop setup`, which:
 | `keyhop add NAME REF [--allow gh,npm]` | Link one secret |
 | `keyhop allow NAME gh` / `deny NAME gh` | Change which commands get a secret (prompts) |
 | `keyhop remove NAME` | Unlink and delete a secret |
+| `keyhop client add NAME --runtime P --entry P --root DIR [--prefix X_]` | Pin a suite client (dialog + Touch ID) |
+| `keyhop client list [--json]` / `client remove NAME` | Show or unpin suite clients |
+| `keyhop client get` / `client put` | For suite clients: JSON on stdin, JSON on stdout |
 | `keyhop doctor` | Check biometrics, vault, tools, scripts and Claude Code |
 | `keyhop update [--check]` | Install the latest version from GitHub |
 
@@ -111,6 +114,21 @@ If Claude runs a program a secret isn't allowed for, keyhop asks you directly in
 
 Shells and interpreters are still refused without asking, and only one request can be open at a time. Line breaks and invisible or right-to-left characters in the path, folder or arguments are shown as `\u{…}`, and a program outside system and package-manager folders gets a ⚠️ warning. Turn the dialog off with `"askForAccess": false` in `config.json`.
 
+## Suite clients
+
+Apps in the hop suite (vpnhop, hopsql) keep their own secrets in keyhop. Each is pinned once by its installer with `keyhop client add`, then spawns `keyhop client get|put` as a direct child.
+
+| | |
+|---|---|
+| Pinned | Runtime real path + SHA-256, entry real path (inside the root), root tree hash: SHA-256 over sorted `relpath NUL sha256 NUL`, `node_modules` included. No symlinks; no world-writable root |
+| Verified per call, before any prompt | Parent's executable (`lsof`), argv exactly `<runtime> <entry> …` (kernel argv, no flags first), no `NODE_*`/`BUN_*` variables except `NODE_ENV`, `NODE_NO_WARNINGS`, `NODE_DISABLE_COLORS`, no `DYLD_*`/`LD_*`, readable environment, working folder inside the root (client launchers `cd` there), tree unchanged. Bun runtimes: no `bunfig.toml` in home |
+| Own names | Names starting with the prefix (`VPNHOP_`): read after Touch ID, written after Touch ID |
+| Other names | Dialog with the client, names and purpose, then Touch ID. "Always allow" is saved per client and bound to the secret's source |
+| Sync | Entries written by clients (source `client:NAME`) survive `keyhop sync` |
+| Exit codes | 0 ok · 1 error · 2 `cancelled` · 3 not a verified client · 4 `denied` · 5 unknown names |
+
+Updating a client changes its tree hash, so its installer reruns `keyhop client add`, which asks again.
+
 ## How it keeps values from Claude
 
 | Guard | Detail |
@@ -134,6 +152,7 @@ Shells and interpreters are still refused without asking, and only one request c
 | A process running as you can read a running program's environment | On macOS, `ps eww` (so Claude's own shell) can see an env secret while the program runs. Prefer stdin or file for long-running programs |
 | Programs in folders you can write to | A file swapped between keyhop's hash check and launch runs with the secret. Be wary of allowing programs Claude could have written |
 | The install folder is yours to write | A process running as you could patch keyhop itself, then wait for your next unlock |
+| Suite client checks run when keyhop starts | A process running as you could edit a client's files, start it, and restore them before it calls keyhop; or start keyhop and then `exec` the real client. The Touch ID prompt is the last guard: don't approve one you didn't expect |
 
 ## Develop
 
@@ -142,5 +161,7 @@ bun install && bun run build:helper && bun test && bun run typecheck
 ```
 
 `build:helper` uses `swiftc` on macOS and the .NET SDK on Windows. `scripts/build-windows.ps1` builds the Windows release zip. To release, bump `package.json`, then push a `vX.Y.Z` tag; `.github/workflows/release.yml` builds and publishes it.
+
+End-to-end runs without Touch ID: `NODE_ENV=test KEYHOP_TEST_AUTH=1 KEYHOP_HOME=<temp dir>` swaps in a test authenticator and auto-answers dialogs with `KEYHOP_TEST_DIALOG` (`once`, `always`, `deny`). It works only in a git checkout (installs have no `.git`), refuses the default data folder, and only opens vaults it created, so it can't unlock a real one.
 
 Data lives in `~/.config/keyhop` (macOS) or `%APPDATA%\keyhop`; override with `KEYHOP_HOME`. MIT licensed.
