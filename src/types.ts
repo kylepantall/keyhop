@@ -96,6 +96,30 @@ export interface VaultData {
   policy: Record<string, SecretPolicy>;
   /** What the last sync fetched, so the next one only fetches what changed. Holds secret values. */
   cache?: SyncCache;
+  /** Suite clients (vpnhop, hopsql …) pinned by `keyhop client add`, keyed by client name. */
+  clients?: Record<string, SuiteClient>;
+}
+
+/**
+ * What keyhop pins about a suite client. A copy without `allow` is kept in
+ * clients.json so an unverified caller is refused before any Touch ID prompt;
+ * the copy in the vault is the authority.
+ */
+export interface ClientPin {
+  /** The runtime binary (node, bun …). */
+  runtime: { path: string; realPath: string; sha256: string };
+  /** The entry file the runtime is started with. Inside `root`. */
+  entry: { path: string; realPath: string };
+  /** Install tree: SHA-256 over `relpath NUL sha256 NUL` of every file, sorted. */
+  root: { path: string; realPath: string; treeHash: string };
+  /** Names starting with this need no grant, e.g. VPNHOP_. */
+  prefix: string;
+  addedAt: string;
+}
+
+export interface SuiteClient extends ClientPin {
+  /** Names outside the prefix the user granted with "Always allow", bound to the origin they had then. */
+  allow: { name: string; origin: string }[];
 }
 
 export interface OpField {

@@ -45,6 +45,8 @@ export interface Paths {
   key: string;
   vault: string;
   syncDir: string;
+  /** Non-secret copy of the suite client pins, checked before any prompt. */
+  clients: string;
 }
 
 export function paths(dir = dataDir()): Paths {
@@ -54,6 +56,7 @@ export function paths(dir = dataDir()): Paths {
     key: join(dir, 'key.json'),
     vault: join(dir, 'vault.enc'),
     syncDir: join(dir, 'sync.d'),
+    clients: join(dir, 'clients.json'),
   };
 }
 

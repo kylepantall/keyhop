@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- Suite clients: `keyhop client add|list|remove` pins an app (vpnhop, hopsql …) by its runtime binary (real path + SHA-256), entry file and a hash of its whole install tree, after a dialog and Touch ID. Pins live in the encrypted vault.
+- `keyhop client get` / `put` (JSON on stdin and stdout): a pinned client reads or writes secrets starting with its prefix (`VPNHOP_` …) after Touch ID. Other names need a per-client grant (dialog + Touch ID; "Always allow" is bound to the secret's source). Exit codes: 0 ok, 1 error, 2 cancelled, 3 not a verified client, 4 denied, 5 unknown name.
+- keyhop verifies its parent process before any prompt: the pinned runtime, argv exactly `<runtime> <entry> …` (read from the kernel, not `ps` text), no `NODE_OPTIONS`/`NODE_PATH`/`BUN_OPTIONS`/`BUN_INSPECT*`/`DYLD_*`/`LD_*`, no stray `bunfig.toml` for Bun runtimes, and an unchanged tree. macOS and Linux; Windows exits 3.
+- `keyhop sync` keeps entries written by clients (source `client:*`).
+- Tests: an end-to-end seam (`NODE_ENV=test KEYHOP_TEST_AUTH=1` plus a non-default `KEYHOP_HOME`) that only opens vaults it created itself.
+
 ## 0.6.1
 
 - Windows: `keyhop-hello.exe` no longer flashes a console window during Windows Hello prompts or the access dialog.

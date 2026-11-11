@@ -21,7 +21,13 @@ export interface AccessRequest {
   cwd: string;
 }
 
-export type Approver = (request: AccessRequest) => Promise<Decision>;
+export type Approver<R = AccessRequest> = (request: R) => Promise<Decision>;
+
+/**
+ * A native dialog showing `message`. `grant`: Deny / Allow once / Always allow.
+ * `confirm`: Cancel / OK, answered as 'deny' or 'once'.
+ */
+export type Dialog = (message: string, kind: 'grant' | 'confirm') => Promise<Decision>;
 
 const DELIVERY_LABEL: Record<Delivery, string> = {
   env: 'environment variable',
@@ -71,40 +77,52 @@ export function describeRequest(request: AccessRequest): string {
   return lines.join('\n');
 }
 
-const MAC_SCRIPT = [
+const macScript = (title: string, buttons: string) => [
   'on run argv',
-  'set answer to display dialog (item 1 of argv) with title "keyhop: allow access?" ' +
-    'buttons {"Deny", "Allow once", "Always allow"} default button "Deny" cancel button "Deny" ' +
+  `set answer to display dialog (item 1 of argv) with title "${title}" ` +
+    `buttons ${buttons} default button "Deny" cancel button "Deny" ` +
     'with icon caution giving up after 120',
   'if gave up of answer then return "Deny"',
   'return button returned of answer',
   'end run',
 ];
 
-const MAC_ANSWERS: Record<string, Decision> = { 'Allow once': 'once', 'Always allow': 'always' };
+const MAC_SCRIPTS = {
+  grant: macScript('keyhop: allow access?', '{"Deny", "Allow once", "Always allow"}'),
+  confirm: macScript('keyhop: confirm', '{"Deny", "Allow"}'),
+};
+
+const MAC_ANSWERS: Record<string, Decision> = { 'Allow once': 'once', 'Always allow': 'always', Allow: 'once' };
 
 /** Native dialog for this platform; null where there is none. */
-export function platformApprover(): Approver | null {
+export function platformDialog(): Dialog | null {
   if (process.platform === 'darwin')
-    return async (request) => {
+    return async (message, kind) => {
       // The message is an argument, never part of the script.
       const result = await runProcess(
         '/usr/bin/osascript',
-        [...MAC_SCRIPT.flatMap((line) => ['-e', line]), describeRequest(request)],
+        [...MAC_SCRIPTS[kind].flatMap((line) => ['-e', line]), message],
         { timeoutMs: ANSWER_MS }
       );
       return (result.code === 0 && MAC_ANSWERS[result.stdout.trim()]) || 'deny';
     };
   if (process.platform === 'win32')
-    return async (request) => {
+    return async (message, kind) => {
       const result = await runProcess(windowsHelperPath, ['ask'], {
         timeoutMs: ANSWER_MS,
-        env: { ...process.env, KEYHOP_ASK_MESSAGE: describeRequest(request) },
+        env: { ...process.env, KEYHOP_ASK_MESSAGE: message },
       });
       const answer = result.stdout.trim();
-      return result.code === 0 && (answer === 'once' || answer === 'always') ? answer : 'deny';
+      if (result.code !== 0 || (answer !== 'once' && answer !== 'always')) return 'deny';
+      return kind === 'confirm' ? 'once' : answer;
     };
   return null;
+}
+
+/** The access-request dialog for run_with_secrets; null where there is none. */
+export function platformApprover(): Approver | null {
+  const dialog = platformDialog();
+  return dialog && ((request) => dialog(describeRequest(request), 'grant'));
 }
 
 const BACKOFF_MS = 30_000;
@@ -115,13 +133,13 @@ const MAX_BACKOFF_MS = 15 * 60_000;
  * program) can ask for a while: 30 s, doubling per deny up to 15 min, reset
  * by an approval. So Claude can't wear the user down with prompts.
  */
-export class AccessGate {
+export class AccessGate<R = AccessRequest> {
   private pending = false;
   private strikes = 0;
   private blockedUntil = 0;
 
   constructor(
-    private readonly approver: Approver,
+    private readonly approver: Approver<R>,
     private readonly now: () => number = Date.now
   ) {}
 
@@ -129,7 +147,7 @@ export class AccessGate {
    * Shows the dialog, then runs `confirm` (the biometric prompt) for an
    * approval. A cancelled confirm counts as a deny.
    */
-  async ask(request: AccessRequest, confirm: () => Promise<void>): Promise<Decision | 'busy' | 'cooling'> {
+  async ask(request: R, confirm: () => Promise<void>): Promise<Decision | 'busy' | 'cooling'> {
     if (this.now() < this.blockedUntil) return 'cooling';
     if (this.pending) return 'busy';
     this.pending = true;

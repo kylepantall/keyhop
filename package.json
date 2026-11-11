@@ -1,6 +1,6 @@
 {
   "name": "keyhop",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "MCP server that lets Claude use secrets from 1Password and your own sync scripts without seeing them, unlocked with Touch ID or Windows Hello.",
   "type": "module",

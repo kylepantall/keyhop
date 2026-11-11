@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AuthCancelledError } from '../src/auth.ts';
 import { paths, type Paths } from '../src/paths.ts';
 import { VaultStore } from '../src/store.ts';
 import type { AuthAction, Authenticator } from '../src/types.ts';
@@ -18,7 +19,7 @@ export function fakeAuth(): Authenticator & { prompts: AuthAction[]; cancelNext:
       auth.prompts.push(action);
       if (auth.cancelNext) {
         auth.cancelNext = false;
-        throw new Error('cancelled');
+        throw new AuthCancelledError('cancelled');
       }
       return secret;
     },

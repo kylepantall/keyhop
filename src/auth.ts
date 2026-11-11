@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { appRoot } from './paths.ts';
 import { runProcess } from './process.ts';
+import { testAuthenticator, testSeamEnabled } from './testauth.ts';
 import type { AuthAction, Authenticator, KeyFile } from './types.ts';
 
 export class AuthCancelledError extends Error {}
@@ -38,6 +39,8 @@ async function runHelper(args: string[], input: object): Promise<string> {
 }
 
 export function platformAuthenticator(): Authenticator {
+  // Only ever opens throwaway vaults it created itself (see testauth.ts).
+  if (testSeamEnabled()) return testAuthenticator();
   if (!isSupportedPlatform())
     throw new Error('keyhop needs Touch ID (macOS) or Windows Hello (Windows).');
   return {
