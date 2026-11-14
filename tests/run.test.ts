@@ -8,7 +8,7 @@ import { assertName } from '../src/config.ts';
 import { assertAllowable, findAllowed, resolveExecutable } from '../src/policy.ts';
 import { redactor } from '../src/redact.ts';
 import { runWithSecrets } from '../src/run.ts';
-import { changeAllowed, summarize, syncVault } from '../src/secrets.ts';
+import { changeAllowed, resolveAllowed, summarize, syncVault } from '../src/secrets.ts';
 import { createServer } from '../src/server.ts';
 import { AccessGate, describeRequest, type AccessRequest, type Decision } from '../src/approve.ts';
 import { VaultStore } from '../src/store.ts';
@@ -268,6 +268,88 @@ describe.if(unix)('run_with_secrets', () => {
       expect(runWithSecrets(store, { command: '/bin/sh', args: ['-c', 'env'], secrets: ['TOKEN'] }, { gate })).rejects.toThrow();
       await Bun.sleep(10);
       expect(asked).toHaveLength(0);
+    });
+
+    describe('one-time bypass', () => {
+      const shell = '/bin/sh';
+      const script = ['-c', 'printf "%s" "$TOKEN" | wc -c'];
+
+      test.if(unix)('runs a shell once after a warning and Touch ID, and remembers nothing', async () => {
+        const { p } = await setup();
+        const auth = fakeAuth();
+        const fresh = new VaultStore(p, auth, 0);
+        const { gate, asked } = gateFor('always');
+        const request = { command: shell, args: script, secrets: ['TOKEN'], bypassGuard: true };
+        const result = await runWithSecrets(fresh, request, { gate });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.trim()).toBe(String(SECRET.length));
+        expect(asked).toHaveLength(1);
+        expect(asked[0]!.bypass).toBe(true);
+        expect(auth.prompts).toContain('bypass');
+        // "always" is still once: no rule, and without the flag it is refused again.
+        expect((await summarize(fresh)).secrets.find((s) => s.name === 'TOKEN')!.allowedCommands).toEqual([]);
+        expect(runWithSecrets(fresh, { ...request, bypassGuard: false }, { gate })).rejects.toThrow(/bypassGuard/);
+        await runWithSecrets(fresh, request, { gate });
+        expect(asked).toHaveLength(2);
+      });
+
+      test.if(unix)('redacts the output', async () => {
+        const { store } = await setup();
+        const { gate } = gateFor('once');
+        const result = await runWithSecrets(
+          store,
+          { command: shell, args: ['-c', 'echo "$TOKEN"'], secrets: ['TOKEN'], bypassGuard: true },
+          { gate }
+        );
+        expect(result.stdout).not.toContain(SECRET);
+      });
+
+      test.if(unix)('a deny or a cancelled Touch ID never runs it', async () => {
+        const { p } = await setup();
+        const marker = join(p.dir, 'ran');
+        const auth = fakeAuth();
+        const fresh = new VaultStore(p, auth, 0);
+        await fresh.read();
+        const request = { command: shell, args: ['-c', `touch ${marker}`], secrets: ['TOKEN'], bypassGuard: true };
+        expect(runWithSecrets(fresh, request, { gate: gateFor('deny').gate })).rejects.toThrow(/denied/);
+        auth.cancelNext = true;
+        expect(runWithSecrets(fresh, request, { gate: gateFor('once').gate })).rejects.toThrow();
+        await Bun.sleep(50);
+        expect(existsSync(marker)).toBe(false);
+      });
+
+      test('needs the dialog, and never puts a secret in an argument', async () => {
+        const { store } = await setup();
+        const { gate, asked } = gateFor('once');
+        expect(
+          runWithSecrets(store, { command: shell, args: [], secrets: ['TOKEN'], bypassGuard: true })
+        ).rejects.toThrow(/dialog/);
+        expect(
+          runWithSecrets(store, { command: shell, args: ['-c', '{{arg:TOKEN}}'], bypassGuard: true }, { gate })
+        ).rejects.toThrow(/argument/);
+        await Bun.sleep(10);
+        expect(asked).toHaveLength(0);
+      });
+
+      test("keyhop's own runtime is refused even with a bypass", async () => {
+        const { store } = await setup();
+        const { gate, asked } = gateFor('once');
+        expect(
+          runWithSecrets(store, { command: process.execPath, args: [], secrets: ['TOKEN'], bypassGuard: true }, { gate })
+        ).rejects.toThrow(/own runtime/);
+        await Bun.sleep(10);
+        expect(asked).toHaveLength(0);
+      });
+
+      test('the dialog says it is a one-time bypass with no "always"', () => {
+        const text = describeRequest({ secrets: ['T'], executable: '/usr/bin/python3', args: [], cwd: '/', bypass: true });
+        expect(text).toContain('ONE-TIME BYPASS');
+        expect(text).not.toContain('Always allow');
+      });
+
+      test('keyhop allow points at the bypass instead', () => {
+        expect(() => resolveAllowed(['/bin/sh'])).toThrow(/keyhop run --bypass/);
+      });
     });
 
     test('a second request while one is open is refused', async () => {

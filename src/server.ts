@@ -72,6 +72,14 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
         stdin: z.string().optional().describe('Secret name whose value is written to standard input.'),
         cwd: z.string().optional().describe('Absolute working directory; defaults to the server cwd.'),
         timeoutSeconds: z.number().int().min(1).max(600).optional().describe('Default 120.'),
+        bypassGuard: z
+          .boolean()
+          .optional()
+          .describe(
+            'Only when the user explicitly asked to run a shell or interpreter (python3, node, bash …) with ' +
+              'secrets. keyhop shows them a one-time bypass warning plus Touch ID / Windows Hello; nothing is ' +
+              'remembered. Never set it on your own initiative, and never in place of a normal allowed command.'
+          ),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },

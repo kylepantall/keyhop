@@ -37,20 +37,32 @@ export function commandName(path: string): string {
   return (path.split(/[\\/]/).pop() ?? path).toLowerCase().replace(/\.exe$/, '');
 }
 
-function assertNameAllowable(path: string): void {
+/** Thrown for shells and interpreters; a one-time bypass can get past it, nothing else can. */
+export class GuardedProgramError extends Error {
+  constructor(readonly program: string) {
+    super(`${program} can run arbitrary code or print its environment, so it cannot be given secrets.`);
+  }
+}
+
+function assertNameAllowable(path: string, bypass: boolean): void {
   const name = commandName(path);
-  if (BLOCKED.has(name) || VERSIONED_INTERPRETER.test(name))
-    throw new Error(`${name} can run arbitrary code or print its environment, so it cannot be given secrets.`);
+  if (!bypass && (BLOCKED.has(name) || VERSIONED_INTERPRETER.test(name))) throw new GuardedProgramError(name);
+  // keyhop itself stays refused even with a bypass: it would reach the vault.
+  if (name === 'keyhop') throw new Error(`${name} is keyhop's own runtime, so it cannot be given secrets.`);
   if (WINDOWS_SCRIPT.test(path))
     throw new Error(`${name} is a script run by an interpreter; allow the real .exe instead.`);
 }
 
-/** Checks both the path asked for and what it really points at. */
-export function assertAllowable(path: string): void {
-  assertNameAllowable(path);
+/**
+ * Checks both the path asked for and what it really points at. `bypass` (a
+ * one-time run the user approved in person) lets shells and interpreters
+ * through, but never keyhop's own runtime or a Windows script file.
+ */
+export function assertAllowable(path: string, { bypass = false } = {}): void {
+  assertNameAllowable(path, bypass);
   if (!existsSync(path)) return;
   const real = realpathSync(path);
-  assertNameAllowable(real);
+  assertNameAllowable(real, bypass);
   // keyhop's own runtime (Bun, or the compiled keyhop.exe) under any name.
   if (real === realpathSync(process.execPath))
     throw new Error(`${path} is keyhop's own runtime, so it cannot be given secrets.`);
@@ -78,9 +90,9 @@ export function hashFile(path: string): Promise<string> {
   });
 }
 
-/** Pins an executable for an allowlist. */
-export async function pinExecutable(path: string): Promise<AllowedExecutable> {
-  assertAllowable(path);
+/** Pins an executable for an allowlist (or, with `bypass`, for one run only). */
+export async function pinExecutable(path: string, { bypass = false } = {}): Promise<AllowedExecutable> {
+  assertAllowable(path, { bypass });
   const realPath = realpathSync(path);
   return { path, realPath, sha256: await hashFile(realPath) };
 }
@@ -97,8 +109,13 @@ export function findAllowed(policy: SecretPolicy | undefined, path: string): All
  * Re-pins `path` and checks it still matches what was allowed. Returns the
  * real path to execute, so a later symlink swap can't change what runs.
  */
-export async function verifyPinned(path: string, allowed: AllowedExecutable, name: string): Promise<string> {
-  const current = await pinExecutable(path);
+export async function verifyPinned(
+  path: string,
+  allowed: AllowedExecutable,
+  name: string,
+  { bypass = false } = {}
+): Promise<string> {
+  const current = await pinExecutable(path, { bypass });
   if (!samePath(allowed.realPath, current.realPath) || allowed.sha256 !== current.sha256)
     throw new Error(
       `${path} has changed since it was allowed for ${name} (now ${current.realPath}). ` +
