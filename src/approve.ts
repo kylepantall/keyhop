@@ -19,15 +19,17 @@ export interface AccessRequest {
   executable: string;
   args: string[];
   cwd: string;
+  /** A shell or interpreter the user is asked to let through for this one run. */
+  bypass?: boolean;
 }
 
 export type Approver<R = AccessRequest> = (request: R) => Promise<Decision>;
 
 /**
  * A native dialog showing `message`. `grant`: Deny / Allow once / Always allow.
- * `confirm`: Cancel / OK, answered as 'deny' or 'once'.
+ * `confirm` and `bypass`: Deny / Allow, answered as 'deny' or 'once'.
  */
-export type Dialog = (message: string, kind: 'grant' | 'confirm') => Promise<Decision>;
+export type Dialog = (message: string, kind: 'grant' | 'confirm' | 'bypass') => Promise<Decision>;
 
 const DELIVERY_LABEL: Record<Delivery, string> = {
   env: 'environment variable',
@@ -61,7 +63,11 @@ export function describeRequest(request: AccessRequest): string {
   let args = request.args.map((arg) => inert(JSON.stringify(arg), MAX_ARGS_CHARS)).join(' ');
   if (args.length > MAX_ARGS_CHARS) args = `${args.slice(0, MAX_ARGS_CHARS)} … (${request.args.length} arguments)`;
   const lines = [
-    'Claude wants to run a command with secrets it is not allowed to use:',
+    request.bypass
+      ? '⚠️ ONE-TIME BYPASS: this program is a shell or interpreter, which keyhop never gives secrets to. ' +
+        'It can run any code, so it could print, save or send these secrets anywhere. Only allow it if you ' +
+        'asked for this exact command.'
+      : 'Claude wants to run a command with secrets it is not allowed to use:',
     '',
     `Secrets:  ${request.secrets
       .map((name) => (request.delivery?.[name]?.length ? `${name} (as ${request.delivery[name]!.map((d) => DELIVERY_LABEL[d]).join(', ')})` : name))
@@ -73,7 +79,11 @@ export function describeRequest(request: AccessRequest): string {
   ];
   if (!USUAL_PLACES.test(request.executable))
     lines.push('⚠️ This program is not in a system or package-manager folder. Claude may have created it.', '');
-  lines.push('"Always allow" lets this program use these secrets with any arguments.');
+  lines.push(
+    request.bypass
+      ? '"Allow" runs this command once. Nothing is remembered; the next run asks again.'
+      : '"Always allow" lets this program use these secrets with any arguments.'
+  );
   return lines.join('\n');
 }
 
@@ -90,6 +100,7 @@ const macScript = (title: string, buttons: string) => [
 const MAC_SCRIPTS = {
   grant: macScript('keyhop: allow access?', '{"Deny", "Allow once", "Always allow"}'),
   confirm: macScript('keyhop: confirm', '{"Deny", "Allow"}'),
+  bypass: macScript('keyhop: one-time bypass', '{"Deny", "Allow"}'),
 };
 
 const MAC_ANSWERS: Record<string, Decision> = { 'Allow once': 'once', 'Always allow': 'always', Allow: 'once' };
@@ -104,17 +115,19 @@ export function platformDialog(): Dialog | null {
         [...MAC_SCRIPTS[kind].flatMap((line) => ['-e', line]), message],
         { timeoutMs: ANSWER_MS }
       );
-      return (result.code === 0 && MAC_ANSWERS[result.stdout.trim()]) || 'deny';
+      const answer = (result.code === 0 && MAC_ANSWERS[result.stdout.trim()]) || 'deny';
+      return kind === 'grant' || answer === 'deny' ? answer : 'once';
     };
   if (process.platform === 'win32')
     return async (message, kind) => {
-      const result = await runProcess(windowsHelperPath, ['ask'], {
+      // Older helpers ignore --once and show all three buttons; the answer is still read as once.
+      const result = await runProcess(windowsHelperPath, kind === 'grant' ? ['ask'] : ['ask', '--once'], {
         timeoutMs: ANSWER_MS,
         env: { ...process.env, KEYHOP_ASK_MESSAGE: message },
       });
       const answer = result.stdout.trim();
       if (result.code !== 0 || (answer !== 'once' && answer !== 'always')) return 'deny';
-      return kind === 'confirm' ? 'once' : answer;
+      return kind === 'grant' ? answer : 'once';
     };
   return null;
 }
@@ -122,7 +135,7 @@ export function platformDialog(): Dialog | null {
 /** The access-request dialog for run_with_secrets; null where there is none. */
 export function platformApprover(): Approver | null {
   const dialog = platformDialog();
-  return dialog && ((request) => dialog(describeRequest(request), 'grant'));
+  return dialog && ((request) => dialog(describeRequest(request), request.bypass ? 'bypass' : 'grant'));
 }
 
 const BACKOFF_MS = 30_000;

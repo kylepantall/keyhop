@@ -2,7 +2,7 @@ import { existsSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { AccessGate } from './approve.ts';
 import { openWindowsPipe, type SecretPipe } from './pipes.ts';
-import { assertAllowable, findAllowed, pinExecutable, resolveExecutable, verifyPinned } from './policy.ts';
+import { assertAllowable, findAllowed, GuardedProgramError, pinExecutable, resolveExecutable, verifyPinned } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
 import type { VaultStore } from './store.ts';
@@ -24,6 +24,12 @@ export interface RunRequest {
   stdin?: string;
   cwd?: string;
   timeoutSeconds?: number;
+  /**
+   * Ask the user to let a shell or interpreter (python3, node, bash …) have the
+   * secrets for this one run. Always a dialog plus Touch ID / Windows Hello;
+   * never remembered, and never in an argument.
+   */
+  bypassGuard?: boolean;
 }
 
 export interface RunResult {
@@ -65,7 +71,20 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   if (!uses.size) throw new Error('Name at least one secret: in secrets, stdin, or an argument as {{file:NAME}} / {{arg:NAME}}.');
   const names = [...uses.keys()];
   const path = resolveExecutable(request.command);
-  assertAllowable(path);
+  let bypass = false;
+  try {
+    assertAllowable(path);
+  } catch (error) {
+    if (!(error instanceof GuardedProgramError)) throw error;
+    if (!request.bypassGuard)
+      throw new Error(
+        `${error.message} If the user asked for this, request a one-time bypass (bypassGuard: true, or ` +
+          'keyhop run --bypass): keyhop then asks them to approve this one run (dialog plus Touch ID / ' +
+          'Windows Hello). It is never remembered.'
+      );
+    assertAllowable(path, { bypass: true });
+    bypass = true;
+  }
   // The launcher starts keyhop in its own folder (so Bun never loads a planted
   // bunfig.toml or .env) and passes the folder it was started from.
   const cwd = request.cwd ?? process.env.KEYHOP_CWD ?? process.cwd();
@@ -78,6 +97,14 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   // A grant covers the program and the ways it may receive the secret: trusting
   // gh with GH_TOKEN in its environment doesn't let Claude hand gh the token as
   // a file to upload (gh gist create {{file:GH_TOKEN}}).
+  if (bypass) {
+    const program = await bypassOnce(store, request, path, cwd, uses, options);
+    return execute(store, request, path, cwd, uses, names, () =>
+      verifyPinned(path, program, names.join(', '), { bypass: true }).catch(() => {
+        throw new Error(`${path} changed after the user approved the one-time bypass, so it was not run.`);
+      })
+    );
+  }
   const grants = names.map((name) => {
     const entry = findAllowed(boundPolicy(vault, name), path);
     const covered = !!entry && [...uses.get(name)!].every((mode) => allowedModes(entry).includes(mode));
@@ -123,10 +150,64 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
       );
     for (const grant of grants) grant.allowed ??= pinned;
   }
-  // Same file as when allowed; run the verified real path so a symlink swap can't redirect it.
-  let executable = path;
-  for (const grant of grants) executable = await verifyPinned(path, grant.allowed!, grant.name);
+  return execute(store, request, path, cwd, uses, names, async () => {
+    // Same file as when allowed; run the verified real path so a symlink swap can't redirect it.
+    let executable = path;
+    for (const grant of grants) executable = await verifyPinned(path, grant.allowed!, grant.name);
+    return executable;
+  });
+}
 
+/**
+ * A shell or interpreter, for one run: the user sees a warning dialog (Deny /
+ * Allow, no "always") and confirms with Touch ID / Windows Hello. Nothing is
+ * saved, so the next run asks again.
+ */
+async function bypassOnce(
+  store: VaultStore,
+  request: RunRequest,
+  path: string,
+  cwd: string,
+  uses: Map<string, Set<Delivery>>,
+  options: RunOptions
+) {
+  const names = [...uses.keys()];
+  const inArg = names.filter((name) => uses.get(name)!.has('arg'));
+  if (inArg.length)
+    throw new Error(`${inArg.join(', ')} may not be placed in an argument with a bypass. Use {{file:NAME}}, stdin or an environment variable.`);
+  if (!options.gate)
+    throw new Error('A one-time bypass needs the user to approve it in a dialog, and access requests are turned off here.');
+  // Pin now, so the file the user approves is the file that runs.
+  const pinned = await pinExecutable(path, { bypass: true });
+  const outcome = await options.gate.ask(
+    {
+      secrets: names,
+      delivery: Object.fromEntries(names.map((name) => [name, [...uses.get(name)!]])),
+      executable: pinned.realPath,
+      args: request.args,
+      cwd,
+      bypass: true,
+    },
+    () => store.confirm('bypass')
+  );
+  if (outcome === 'busy') throw new Error('Another access request is waiting for the user. Try again once they answer.');
+  if (outcome === 'cooling') throw new Error("The user recently denied an access request, so keyhop won't ask again yet.");
+  if (outcome === 'deny') throw new Error(`The user denied the one-time bypass for ${path}.`);
+  // 'once' or 'always': either way, for this run only.
+  return pinned;
+}
+
+async function execute(
+  store: VaultStore,
+  request: RunRequest,
+  path: string,
+  cwd: string,
+  uses: Map<string, Set<Delivery>>,
+  names: string[],
+  verify: () => Promise<string>
+): Promise<RunResult> {
+  const executable = await verify();
+  const vault = await store.read();
   const all = syncedSecrets(vault);
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(all)) delete env[name];

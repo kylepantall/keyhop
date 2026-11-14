@@ -158,7 +158,7 @@ export interface SyncCacheState {
 }
 
 /** `grant`: confirms an access request the user just approved in keyhop's dialog. */
-export type AuthAction = 'unlock' | 'change' | 'grant';
+export type AuthAction = 'unlock' | 'change' | 'grant' | 'bypass';
 
 /** Platform biometric backend (Secure Enclave + Touch ID, or Windows Hello). */
 export interface Authenticator {

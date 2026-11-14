@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- One-time bypass for scripts: shells and interpreters (`python3`, `node`, `bash` …) can be given secrets for a single run, after a ⚠️ one-time bypass dialog (Deny / Allow only) and Touch ID / Windows Hello. Nothing is remembered. From the terminal: `keyhop run --bypass --secrets NAME -- python3 script.py`; from Claude: `run_with_secrets` with `bypassGuard: true`.
+- New `keyhop run [--bypass] [--secrets A,B] [--stdin NAME] [--timeout S] -- COMMAND …`, which uses the same allowlist, dialog and redaction as `run_with_secrets`.
+- A bypass never puts a secret in an argument, and keyhop's own runtime and Windows script files stay refused. `keyhop allow NAME python3` now points at the bypass.
+- Touch ID / Windows Hello helpers gain a `bypass` prompt; the Windows dialog can show just Deny / Allow (`keyhop-hello ask --once`).
+
 ## 0.7.0
 
 - Suite clients: `keyhop client add|list|remove` pins an app (vpnhop, hopsql …) by its runtime binary (real path + SHA-256), entry file and a hash of its whole install tree, after a dialog and Touch ID. Pins live in the encrypted vault.

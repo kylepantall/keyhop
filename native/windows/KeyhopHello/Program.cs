@@ -3,8 +3,9 @@
 //   keyhop-hello probe                      -> {"helloSupported": bool}
 //   keyhop-hello selftest                   -> checks the WinRT plumbing without a prompt (CI)
 //   keyhop-hello create [--replace]         -> {"peer": b64}
-//   keyhop-hello derive <unlock|change|grant>  stdin {"peer"} -> b64 secret
-//   keyhop-hello ask                        $KEYHOP_ASK_MESSAGE -> deny | once | always
+//   keyhop-hello derive <unlock|change|grant|bypass>  stdin {"peer"} -> b64 secret
+//   keyhop-hello ask [--once]               $KEYHOP_ASK_MESSAGE -> deny | once | always
+//                                           (--once: only Deny / Allow)
 //   keyhop-hello pipe <name>                stdin: b64 value, then the reader's pid -> "ready";
 //                                           serves \\.\pipe\<name> once to that process tree,
 //                                           exits when stdin closes
@@ -64,13 +65,13 @@ namespace Keyhop
                         Console.WriteLine(Create(Array.IndexOf(args, "--replace") >= 0));
                         return 0;
                     case "derive":
-                        if (args.Length < 2 || !Regex.IsMatch(args[1], "^(unlock|change|grant)$"))
-                            throw new ExitException("Usage: keyhop-hello derive <unlock|change|grant>");
+                        if (args.Length < 2 || !Regex.IsMatch(args[1], "^(unlock|change|grant|bypass)$"))
+                            throw new ExitException("Usage: keyhop-hello derive <unlock|change|grant|bypass>");
                         RequireHello();
                         Console.WriteLine(Derive(Console.In.ReadToEnd()));
                         return 0;
                     case "ask":
-                        Console.WriteLine(Ask(Environment.GetEnvironmentVariable("KEYHOP_ASK_MESSAGE") ?? ""));
+                        Console.WriteLine(Ask(Environment.GetEnvironmentVariable("KEYHOP_ASK_MESSAGE") ?? "", Array.IndexOf(args, "--once") >= 0));
                         return 0;
                     case "pipe":
                         if (args.Length < 2 || !Regex.IsMatch(args[1], "^keyhop-[0-9a-f]{32}$"))
@@ -78,7 +79,7 @@ namespace Keyhop
                         ServePipe(args[1]);
                         return 0;
                     default:
-                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant> | ask | pipe <name>");
+                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant|bypass> | ask [--once] | pipe <name>");
                 }
             }
             catch (ExitException error)
@@ -268,7 +269,7 @@ namespace Keyhop
         private static extern bool CloseHandle(IntPtr handle);
 
         /// <summary>Deny is the default and the cancel button; closing or 2 minutes without an answer denies.</summary>
-        private static string Ask(string message)
+        private static string Ask(string message, bool onceOnly)
         {
             Application.EnableVisualStyles();
             var choice = "deny";
@@ -295,7 +296,10 @@ namespace Keyhop
                     UseMnemonic = false,
                 });
                 var buttons = new FlowLayoutPanel { AutoSize = true };
-                foreach (var (label, value) in new[] { ("Deny", "deny"), ("Allow once", "once"), ("Always allow", "always") })
+                var choices = onceOnly
+                    ? new[] { ("Deny", "deny"), ("Allow", "once") }
+                    : new[] { ("Deny", "deny"), ("Allow once", "once"), ("Always allow", "always") };
+                foreach (var (label, value) in choices)
                 {
                     var button = new Button { Text = label, AutoSize = true };
                     button.Click += (_, _) => { choice = value; form.Close(); };

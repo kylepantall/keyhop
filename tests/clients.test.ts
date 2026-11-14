@@ -55,7 +55,7 @@ function inspectorFor(f: Fixture, overrides: Partial<{ executable: string | null
 
 function fakeDialog(answer: Decision = 'once'): Dialog & { shown: { message: string; kind: string }[]; answer: Decision } {
   const dialog = Object.assign(
-    async (message: string, kind: 'grant' | 'confirm') => {
+    async (message: string, kind: Parameters<Dialog>[1]) => {
       dialog.shown.push({ message, kind });
       return dialog.answer;
     },

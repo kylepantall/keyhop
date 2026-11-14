@@ -1,7 +1,7 @@
 // keyhop-auth: Touch ID-gated key agreement with a Secure Enclave key.
 //
 //   keyhop-auth create [--biometry-only]   -> {"seKey": b64, "peer": b64}
-//   keyhop-auth derive <unlock|change|grant>     stdin {"seKey", "peer"} -> b64 secret
+//   keyhop-auth derive <unlock|change|grant|bypass>     stdin {"seKey", "peer"} -> b64 secret
 //
 // The Secure Enclave key never leaves this Mac's Secure Enclave; seKey is an
 // opaque blob only that Secure Enclave can use. derive agrees it with a
@@ -37,6 +37,7 @@ func reason(for action: String) -> String {
   case "unlock": return "unlock your keyhop vault"
   case "change": return "change which tools may use your keyhop secrets"
   case "grant": return "let Claude run the command you just approved with your keyhop secrets"
+  case "bypass": return "run the shell or interpreter you just approved, once, with your keyhop secrets"
   default: fail("Unknown action: \(action)")
   }
 }
@@ -72,7 +73,7 @@ func authenticate(_ context: LAContext, biometryOnly: Bool, reason: String) {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard let command = arguments.first else {
-  fail("Usage: keyhop-auth create [--biometry-only] | derive <unlock|change|grant>")
+  fail("Usage: keyhop-auth create [--biometry-only] | derive <unlock|change|grant|bypass>")
 }
 
 switch command {

@@ -42,6 +42,7 @@ On a first install the installer starts `keyhop setup`, which:
 | `keyhop list` | Names, sources and allowed commands (never values) |
 | `keyhop add NAME REF [--allow gh,npm]` | Link one secret |
 | `keyhop allow NAME gh` / `deny NAME gh` | Change which commands get a secret (prompts) |
+| `keyhop run [--bypass] --secrets NAME -- COMMAND …` | Run a command with secrets from your terminal; `--bypass` lets a shell or interpreter through for that one run |
 | `keyhop remove NAME` | Unlink and delete a secret |
 | `keyhop client add NAME --runtime P --entry P --root DIR [--prefix X_]` | Pin a suite client (dialog + Touch ID) |
 | `keyhop client list [--json]` / `client remove NAME` | Show or unpin suite clients |
@@ -112,7 +113,17 @@ If Claude runs a program a secret isn't allowed for, keyhop asks you directly in
 | Allow once | Touch ID / Hello, then this run only; nothing saved |
 | Always allow | Touch ID / Hello, then saved like `keyhop allow` (any arguments, this exact file) |
 
-Shells and interpreters are still refused without asking, and only one request can be open at a time. Line breaks and invisible or right-to-left characters in the path, folder or arguments are shown as `\u{…}`, and a program outside system and package-manager folders gets a ⚠️ warning. Turn the dialog off with `"askForAccess": false` in `config.json`.
+Shells and interpreters are still refused without asking (see below), and only one request can be open at a time. Line breaks and invisible or right-to-left characters in the path, folder or arguments are shown as `\u{…}`, and a program outside system and package-manager folders gets a ⚠️ warning. Turn the dialog off with `"askForAccess": false` in `config.json`.
+
+### One-time bypass for scripts
+
+Shells and interpreters (`python3`, `node`, `bash` …) can never be allowed, because they can run any code and print a secret. When you do want a script to have one, approve it for a single run:
+
+```sh
+keyhop run --bypass --secrets OPENAI_API_KEY -- python3 scripts/embed.py
+```
+
+Or ask Claude to; it calls `run_with_secrets` with `bypassGuard: true`. Either way keyhop shows a ⚠️ **one-time bypass** dialog (the real program, its arguments and folder, with only Deny / Allow) and then Touch ID / Windows Hello. Nothing is saved, so the next run asks again. Secrets go in as environment variables, stdin or `{{file:NAME}}`, never in an argument, and output is redacted. keyhop's own runtime and `.cmd`/`.ps1`-style script files stay refused, and a deny starts the same cool-down as any other. `keyhop run` captures output, so it suits batch scripts rather than interactive ones.
 
 ## Suite clients
 

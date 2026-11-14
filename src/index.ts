@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import * as ui from '@clack/prompts';
-import { platformDialog } from './approve.ts';
+import { AccessGate, describeRequest, platformDialog, type AccessRequest } from './approve.ts';
 import { platformAuthenticator } from './auth.ts';
 import { runClient } from './clients.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { runDoctor } from './doctor.ts';
 import { paths } from './paths.ts';
 import { providerFor } from './providers.ts';
+import { runWithSecrets } from './run.ts';
 import { changeAllowed, resolveAllowed, summarize, syncVault } from './secrets.ts';
 import { serve } from './server.ts';
 import { runSetup } from './setup.ts';
@@ -33,6 +34,11 @@ Usage: keyhop <command>
                                 environment variable. arg puts the value in its command line, where
                                 the process list shows it
   deny NAME COMMAND...          Take that back
+  run [--bypass] [--secrets A,B] [--stdin NAME] [--timeout S] -- COMMAND ARGS...
+                                Run COMMAND with secrets (as environment variables, on stdin, or
+                                {{file:NAME}} in an argument). Commands not yet allowed ask first.
+                                --bypass: a shell or interpreter (python3, node …) for this one run,
+                                after a warning dialog and Touch ID; never remembered
   client add NAME --runtime PATH --entry PATH --root DIR [--prefix PREFIX_]
                                 Pin a suite client (vpnhop, hopsql …) so it may read and write
                                 secrets starting with its prefix (dialog + Touch ID)
@@ -187,6 +193,40 @@ async function main(argv: string[]): Promise<number> {
       console.log(`${name} may be used with: ${result[name]!.join(', ') || 'nothing'}`);
       if (modes.includes('arg')) console.log('As an argument, the value shows in the process list while the program runs.');
       return 0;
+    }
+    case 'run': {
+      const split = args.indexOf('--');
+      if (split === -1) throw new Error('Usage: keyhop run [--bypass] [--secrets A,B] [--stdin NAME] [--timeout S] -- COMMAND ARGS...');
+      const flags = args.slice(0, split);
+      const [program, ...programArgs] = args.slice(split + 1);
+      const bypass = flags.includes('--bypass');
+      if (bypass) flags.splice(flags.indexOf('--bypass'), 1);
+      const secrets = option(flags, '--secrets');
+      const stdin = option(flags, '--stdin');
+      const timeout = option(flags, '--timeout');
+      if (!program || flags.length) throw new Error(`Usage: keyhop run [--bypass] [--secrets A,B] [--stdin NAME] [--timeout S] -- COMMAND ARGS...${flags.length ? ` (unknown: ${flags.join(' ')})` : ''}`);
+      if (timeout && !/^\d+$/.test(timeout)) throw new Error('--timeout needs a number of seconds.');
+      const dialog = testSeamEnabled() ? testDialog() : platformDialog();
+      if (!dialog) throw new Error('keyhop run needs the macOS or Windows access dialog.');
+      const gate = new AccessGate((request: AccessRequest) => dialog(describeRequest(request), request.bypass ? 'bypass' : 'grant'));
+      const result = await runWithSecrets(
+        store(),
+        {
+          command: program,
+          args: programArgs,
+          secrets: secrets ? secrets.split(',').map((name) => name.trim()) : [],
+          stdin,
+          timeoutSeconds: timeout ? Number(timeout) : undefined,
+          bypassGuard: bypass,
+        },
+        { gate }
+      );
+      // Redacted like run_with_secrets, since Claude may be the one reading this terminal.
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      if (result.truncated) console.error('keyhop: output was truncated.');
+      if (result.timedOut) console.error('keyhop: the command timed out.');
+      return result.exitCode ?? 1;
     }
     default:
       throw new Error(`Unknown command: ${command}. Run keyhop help.`);

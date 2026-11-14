@@ -1,5 +1,5 @@
 import { assertName, loadConfig } from './config.ts';
-import { assertAllowable, pinExecutable, resolveExecutable } from './policy.ts';
+import { assertAllowable, GuardedProgramError, pinExecutable, resolveExecutable } from './policy.ts';
 import type { VaultStore } from './store.ts';
 import { collectSecrets, planSteps } from './sync.ts';
 import {
@@ -78,7 +78,16 @@ export async function syncVault(
 export function resolveAllowed(commands: string[]): string[] {
   return commands.map((command) => {
     const path = resolveExecutable(command);
-    assertAllowable(path);
+    try {
+      assertAllowable(path);
+    } catch (error) {
+      if (error instanceof GuardedProgramError)
+        throw new Error(
+          `${error.message} It can never be allowed permanently. To run one command with secrets anyway, ` +
+            `approve a one-time bypass: keyhop run --bypass --secrets NAME -- ${command} …`
+        );
+      throw error;
+    }
     return path;
   });
 }
