@@ -5,6 +5,7 @@ import { openWindowsPipe, type SecretPipe } from './pipes.ts';
 import { assertAllowable, findAllowed, GuardedProgramError, pinExecutable, resolveExecutable, verifyPinned } from './policy.ts';
 import { runProcess } from './process.ts';
 import { redactor } from './redact.ts';
+import { findScript, snapshotScript, type Script } from './script.ts';
 import type { VaultStore } from './store.ts';
 import { changeAllowed, syncedSecrets } from './secrets.ts';
 import { allowedModes, type Delivery, type VaultData } from './types.ts';
@@ -12,6 +13,8 @@ import { allowedModes, type Delivery, type VaultData } from './types.ts';
 export interface RunOptions {
   /** Asks the user about secrets not allowed for the program; without it they are refused. */
   gate?: AccessGate;
+  /** Who is asking, named in the dialog (see clientLabel). */
+  client?: string;
 }
 
 export interface RunRequest {
@@ -30,6 +33,8 @@ export interface RunRequest {
    * never remembered, and never in an argument.
    */
   bypassGuard?: boolean;
+  /** Why, in the caller's words; shown in the dialog if keyhop asks the user. */
+  reason?: string;
 }
 
 export interface RunResult {
@@ -98,12 +103,29 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   // gh with GH_TOKEN in its environment doesn't let Claude hand gh the token as
   // a file to upload (gh gist create {{file:GH_TOKEN}}).
   if (bypass) {
-    const program = await bypassOnce(store, request, path, cwd, uses, options);
-    return execute(store, request, path, cwd, uses, names, () =>
-      verifyPinned(path, program, names.join(', '), { bypass: true }).catch(() => {
-        throw new Error(`${path} changed after the user approved the one-time bypass, so it was not run.`);
-      })
-    );
+    // Read the script once, before the dialog: the user approves these bytes, and a copy of them is what runs.
+    const script = findScript(path, request.args, cwd);
+    const program = await bypassOnce(store, request, path, cwd, uses, script, options);
+    const snapshot = script ? await snapshotScript(script, request.args) : undefined;
+    try {
+      return await execute(
+        store,
+        request,
+        path,
+        cwd,
+        uses,
+        names,
+        async () => {
+          await snapshot?.verify();
+          return verifyPinned(path, program, names.join(', '), { bypass: true }).catch(() => {
+            throw new Error(`${path} changed after the user approved the one-time bypass, so it was not run.`);
+          });
+        },
+        snapshot?.args
+      );
+    } finally {
+      await snapshot?.remove();
+    }
   }
   const grants = names.map((name) => {
     const entry = findAllowed(boundPolicy(vault, name), path);
@@ -134,6 +156,8 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
         executable: pinned.realPath,
         args: request.args,
         cwd,
+        client: options.client,
+        reason: request.reason,
       },
       () => store.confirm('grant')
     );
@@ -169,6 +193,7 @@ async function bypassOnce(
   path: string,
   cwd: string,
   uses: Map<string, Set<Delivery>>,
+  script: Script | null,
   options: RunOptions
 ) {
   const names = [...uses.keys()];
@@ -187,6 +212,9 @@ async function bypassOnce(
       args: request.args,
       cwd,
       bypass: true,
+      client: options.client,
+      reason: request.reason,
+      script,
     },
     () => store.confirm('bypass')
   );
@@ -204,7 +232,8 @@ async function execute(
   cwd: string,
   uses: Map<string, Set<Delivery>>,
   names: string[],
-  verify: () => Promise<string>
+  verify: () => Promise<string>,
+  runArgs: string[] = request.args
 ): Promise<RunResult> {
   const executable = await verify();
   const vault = await store.read();
@@ -226,7 +255,7 @@ async function execute(
         filePaths.set(name, pipe.path);
       }
     } else fileNames.forEach((name, i) => filePaths.set(name, `/dev/fd/${3 + i}`));
-    const args = request.args.map((arg) =>
+    const args = runArgs.map((arg) =>
       arg.replace(PLACEHOLDER, (_, kind: string, name: string) => (kind === 'file' ? filePaths.get(name)! : all[name]!))
     );
     const timeoutSeconds = Math.min(Math.max(request.timeoutSeconds ?? 120, 1), 600);
