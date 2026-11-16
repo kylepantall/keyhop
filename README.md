@@ -42,7 +42,7 @@ On a first install the installer starts `keyhop setup`, which:
 | `keyhop list` | Names, sources and allowed commands (never values) |
 | `keyhop add NAME REF [--allow gh,npm]` | Link one secret |
 | `keyhop allow NAME gh` / `deny NAME gh` | Change which commands get a secret (prompts) |
-| `keyhop run [--bypass] --secrets NAME -- COMMAND …` | Run a command with secrets from your terminal; `--bypass` lets a shell or interpreter through for that one run |
+| `keyhop run [--bypass] [--reason TEXT] --secrets NAME -- COMMAND …` | Run a command with secrets from your terminal; `--bypass` lets a shell or interpreter through for that one run |
 | `keyhop remove NAME` | Unlink and delete a secret |
 | `keyhop client add NAME --runtime P --entry P --root DIR [--prefix X_]` | Pin a suite client (dialog + Touch ID) |
 | `keyhop client list [--json]` / `client remove NAME` | Show or unpin suite clients |
@@ -123,7 +123,12 @@ Shells and interpreters (`python3`, `node`, `bash` …) can never be allowed, be
 keyhop run --bypass --secrets OPENAI_API_KEY -- python3 scripts/embed.py
 ```
 
-Or ask Claude to; it calls `run_with_secrets` with `bypassGuard: true`. Either way keyhop shows a ⚠️ **one-time bypass** dialog (the real program, its arguments and folder, with only Deny / Allow) and then Touch ID / Windows Hello. Nothing is saved, so the next run asks again. Secrets go in as environment variables, stdin or `{{file:NAME}}`, never in an argument, and output is redacted. keyhop's own runtime and `.cmd`/`.ps1`-style script files stay refused, and a deny starts the same cool-down as any other. `keyhop run` captures output, so it suits batch scripts rather than interactive ones.
+Or ask Claude to; it calls `run_with_secrets` with `bypassGuard: true`. Either way keyhop shows a ⚠️ **one-time bypass** dialog and then Touch ID / Windows Hello. The dialog says who is asking ("Claude Code would like to run a script. It will have access to your secrets."), why, in the caller's own words (`reason`, or `--reason` from the terminal), the real program, its arguments and folder, and two sections you can open:
+
+- **Secrets requested**: each name (never a value) and how it is handed over.
+- **View script**: the code it will run, syntax highlighted with line numbers. Inline code (`python3 -c`, `node -e`, `bash -c`, `pwsh -Command` …) is shown as given. A script file is read once, and a private read-only copy of exactly what you saw is what runs (next to the original, so relative imports still work; deleted afterwards), so editing the file after the dialog changes nothing. Invisible or right-to-left characters are shown as red-flagged `\u{…}` escapes, and long lines wrap so nothing hides past the edge. When keyhop can't be sure which code runs (`python3 -m`, `node -r preload.js`, an unknown interpreter), it says so instead of guessing. The script can still load other files.
+
+Deny is the default (Return and Escape both deny), Allow only works after a second, and the dialog denies by itself after 3 minutes. The client's name comes from its own MCP handshake: Claude's apps are named as such, anything else is shown as "An app calling itself …". Nothing is saved, so the next run asks again. Secrets go in as environment variables, stdin or `{{file:NAME}}`, never in an argument, and output is redacted. keyhop's own runtime and `.cmd`/`.ps1`-style script files stay refused, and a deny starts the same cool-down as any other. `keyhop run` captures output, so it suits batch scripts rather than interactive ones.
 
 ## Suite clients
 

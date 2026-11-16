@@ -341,6 +341,29 @@ describe.if(unix)('run_with_secrets', () => {
         expect(asked).toHaveLength(0);
       });
 
+      test.if(unix)('runs exactly the script the user was shown, even if the file changes during the dialog', async () => {
+        const { store, p } = await setup();
+        const script = join(p.dir, 'job.sh');
+        await writeFile(script, 'echo approved\n');
+        const asked: AccessRequest[] = [];
+        const gate = new AccessGate(async (request) => {
+          asked.push(request);
+          await writeFile(script, 'echo "swapped $TOKEN"\n');
+          return 'once';
+        });
+        const result = await runWithSecrets(
+          store,
+          { command: shell, args: ['job.sh'], cwd: p.dir, secrets: ['TOKEN'], bypassGuard: true, reason: 'Run the job' },
+          { gate, client: 'Claude Code' }
+        );
+        expect(result.stdout.trim()).toBe('approved');
+        expect(asked[0]!.script).toMatchObject({ kind: 'file', code: 'echo approved\n' });
+        expect(asked[0]!.client).toBe('Claude Code');
+        expect(asked[0]!.reason).toBe('Run the job');
+        // The private copy is gone.
+        expect((await Array.fromAsync(new Bun.Glob('.keyhop-*').scan({ cwd: p.dir, dot: true })))).toEqual([]);
+      });
+
       test('the dialog says it is a one-time bypass with no "always"', () => {
         const text = describeRequest({ secrets: ['T'], executable: '/usr/bin/python3', args: [], cwd: '/', bypass: true });
         expect(text).toContain('ONE-TIME BYPASS');

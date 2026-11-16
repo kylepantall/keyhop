@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0
+
+- The access dialog says who is asking and why: "Claude Code would like to run a script. It will have access to your secrets.", plus the caller's own reason (new `reason` on `run_with_secrets`, `--reason` on `keyhop run`), quoted and made inert.
+- **Secrets requested** section: the names (never values) and how each is handed over.
+- **View script** section (one-time bypass): the code the shell or interpreter will run, syntax highlighted with line numbers, from inline code (`-c`, `-e`, `-Command` …) or the script file. A script file is read once and a read-only copy of exactly those bytes is what runs, so changing the file after approval changes nothing. Invisible and bidi characters are flagged, and when keyhop can't tell which code runs it says so.
+- New native dialogs: `keyhop-auth ask` on macOS (AppKit) and `keyhop-hello ask --prompt` on Windows. Deny stays the default, Allow is enabled after a second, and an unanswered dialog denies after 3 minutes. Older helpers fall back to the plain dialog.
+
 ## 0.8.0
 
 - One-time bypass for scripts: shells and interpreters (`python3`, `node`, `bash` …) can be given secrets for a single run, after a ⚠️ one-time bypass dialog (Deny / Allow only) and Touch ID / Windows Hello. Nothing is remembered. From the terminal: `keyhop run --bypass --secrets NAME -- python3 script.py`; from Claude: `run_with_secrets` with `bypassGuard: true`.

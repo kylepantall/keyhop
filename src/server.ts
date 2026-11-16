@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { AccessGate, platformApprover } from './approve.ts';
+import { AccessGate, clientLabel, platformApprover } from './approve.ts';
 import { loadConfig, unlockMs } from './config.ts';
 import { platformAuthenticator } from './auth.ts';
 import { paths } from './paths.ts';
@@ -80,10 +80,19 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
               'secrets. keyhop shows them a one-time bypass warning plus Touch ID / Windows Hello; nothing is ' +
               'remembered. Never set it on your own initiative, and never in place of a normal allowed command.'
           ),
+        reason: z
+          .string()
+          .max(300)
+          .optional()
+          .describe(
+            'One short sentence for the user on why this needs the secrets (e.g. "Upload the build to the ' +
+              'staging bucket"). Shown, quoted as your words, if keyhop asks them to approve.'
+          ),
       },
       annotations: { destructiveHint: true, openWorldHint: true },
     },
-    (input) => respond(() => runWithSecrets(store, input, { gate }))
+    // The client names itself when it connects; the dialog says who is asking.
+    (input) => respond(() => runWithSecrets(store, input, { gate, client: clientLabel(server.server.getClientVersion()?.name ?? '') }))
   );
 
   server.registerTool(

@@ -6,6 +6,9 @@
 //   keyhop-hello derive <unlock|change|grant|bypass>  stdin {"peer"} -> b64 secret
 //   keyhop-hello ask [--once]               $KEYHOP_ASK_MESSAGE -> deny | once | always
 //                                           (--once: only Deny / Allow)
+//   keyhop-hello ask [--once] --prompt      stdin: prompt lines -> deny | once | always
+//                                           (who is asking and why, the secrets, and the
+//                                           script it will run, highlighted)
 //   keyhop-hello pipe <name>                stdin: b64 value, then the reader's pid -> "ready";
 //                                           serves \\.\pipe\<name> once to that process tree,
 //                                           exits when stdin closes
@@ -19,6 +22,7 @@
 // Exit codes: 0 ok, 1 error, 2 cancelled, 3 key exists (create without --replace).
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
@@ -29,6 +33,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Windows.Security.Credentials;
@@ -70,6 +75,9 @@ namespace Keyhop
                         RequireHello();
                         Console.WriteLine(Derive(Console.In.ReadToEnd()));
                         return 0;
+                    case "ask" when Array.IndexOf(args, "--prompt") >= 0:
+                        Console.WriteLine(AskPrompt(ReadPrompt(Console.In.ReadToEnd()), Array.IndexOf(args, "--once") >= 0));
+                        return 0;
                     case "ask":
                         Console.WriteLine(Ask(Environment.GetEnvironmentVariable("KEYHOP_ASK_MESSAGE") ?? "", Array.IndexOf(args, "--once") >= 0));
                         return 0;
@@ -79,7 +87,7 @@ namespace Keyhop
                         ServePipe(args[1]);
                         return 0;
                     default:
-                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant|bypass> | ask [--once] | pipe <name>");
+                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant|bypass> | ask [--once] [--prompt] | pipe <name>");
                 }
             }
             catch (ExitException error)
@@ -267,6 +275,211 @@ namespace Keyhop
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr handle);
+
+        /// <summary>
+        /// What keyhop asks the user: lines of tab-separated fields, each value base64 UTF-8.
+        /// Every string is fixed wording or already made inert by keyhop (no line breaks,
+        /// bidi or invisible characters of the caller's).
+        /// </summary>
+        private sealed class PromptData
+        {
+            public string Title = "keyhop", Headline = "", Message = "", Footer = "", Buttons = "once";
+            public string? Reason, NoScript, ScriptLabel;
+            public readonly List<(string, string)> Details = new List<(string, string)>();
+            public readonly List<(string, string)> Secrets = new List<(string, string)>();
+            public readonly List<(string, string)> Tokens = new List<(string, string)>();
+            public readonly List<string> Warnings = new List<string>();
+        }
+
+        private static PromptData ReadPrompt(string input)
+        {
+            var prompt = new PromptData();
+            foreach (var line in input.Split('\n'))
+            {
+                var f = line.TrimEnd('\r').Split('\t');
+                string V(int i)
+                {
+                    if (i >= f.Length) return "";
+                    try { return Encoding.UTF8.GetString(Convert.FromBase64String(f[i])); }
+                    catch (FormatException) { return ""; }
+                }
+                switch (f[0])
+                {
+                    case "title": prompt.Title = V(1); break;
+                    case "headline": prompt.Headline = V(1); break;
+                    case "message": prompt.Message = V(1); break;
+                    case "reason": prompt.Reason = V(1); break;
+                    case "detail": prompt.Details.Add((V(1), V(2))); break;
+                    case "warning": prompt.Warnings.Add(V(1)); break;
+                    case "secret": prompt.Secrets.Add((V(1), V(2))); break;
+                    case "noscript": prompt.NoScript = V(1); break;
+                    case "scriptlabel": prompt.ScriptLabel = V(1); break;
+                    case "token": prompt.Tokens.Add((f.Length > 1 ? f[1] : "plain", V(2))); break;
+                    case "footer": prompt.Footer = V(1); break;
+                    case "buttons": prompt.Buttons = f.Length > 1 && f[1] == "grant" ? "grant" : "once"; break;
+                }
+            }
+            return prompt;
+        }
+
+        /// <summary>The highlighted script as RTF (fast for long scripts, and every character escaped).</summary>
+        private static string ScriptRtf(List<(string, string)> tokens)
+        {
+            var rtf = new StringBuilder();
+            rtf.Append(@"{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Consolas;}}");
+            // 1 text, 2 keyword, 3 string, 4 number, 5 comment, 6 gutter, 7 hidden background
+            rtf.Append(@"{\colortbl ;\red30\green30\blue30;\red155\green35\blue175;\red196\green26\blue22;\red28\green0\blue207;\red110\green110\blue110;\red165\green165\blue165;\red255\green214\blue10;}");
+            rtf.Append(@"\f0\fs19 ");
+            foreach (var (kind, text) in tokens)
+            {
+                var color = kind switch { "keyword" => 2, "string" => 3, "number" => 4, "comment" => 5, "gutter" => 6, _ => 1 };
+                var bold = kind == "keyword" || kind == "hidden";
+                rtf.Append(@"{\cf").Append(color);
+                if (kind == "hidden") rtf.Append(@"\highlight7");
+                if (bold) rtf.Append(@"\b");
+                rtf.Append(' ');
+                foreach (var c in text)
+                {
+                    if (c == '\\' || c == '{' || c == '}') rtf.Append('\\').Append(c);
+                    else if (c == '\n') rtf.Append(@"\par ");
+                    else if (c == '\t') rtf.Append(@"\tab ");
+                    else if (c < 0x20) rtf.Append(' ');
+                    else if (c > 0x7e) rtf.Append(@"\u").Append((short)c).Append('?');
+                    else rtf.Append(c);
+                }
+                rtf.Append('}');
+            }
+            rtf.Append('}');
+            return rtf.ToString();
+        }
+
+        /// <summary>
+        /// The access dialog: who is asking and why, then the secrets and the script in sections
+        /// the user can open. Deny is the default and the cancel button; closing, Escape or
+        /// 3 minutes without an answer denies, and Allow only works after a second.
+        /// </summary>
+        private static string AskPrompt(PromptData prompt, bool onceOnly)
+        {
+            Application.EnableVisualStyles();
+            const int width = 620;
+            var choice = "deny";
+            using (var form = new Form
+            {
+                Text = prompt.Title,
+                TopMost = true,
+                StartPosition = FormStartPosition.CenterScreen,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(14),
+            })
+            {
+                var layout = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true };
+                Label MakeLabel(string text, Font? font = null, Color? color = null) => new Label
+                {
+                    Text = text,
+                    AutoSize = true,
+                    MaximumSize = new Size(width, 0),
+                    UseMnemonic = false,
+                    Font = font ?? SystemFonts.MessageBoxFont,
+                    ForeColor = color ?? SystemColors.ControlText,
+                    Margin = new Padding(0, 0, 0, 8),
+                };
+                var baseFont = SystemFonts.MessageBoxFont;
+                var muted = SystemColors.GrayText;
+
+                layout.Controls.Add(MakeLabel(prompt.Headline, new Font(baseFont.FontFamily, 11f, FontStyle.Bold)));
+                layout.Controls.Add(MakeLabel(prompt.Message));
+                if (prompt.Reason != null) layout.Controls.Add(MakeLabel(prompt.Reason, new Font(baseFont, FontStyle.Italic)));
+                foreach (var (name, value) in prompt.Details) layout.Controls.Add(MakeLabel(name + ":  " + value, null, muted));
+
+                void Section(string title, Control content)
+                {
+                    var link = new LinkLabel { Text = "▸  " + title, AutoSize = true, UseMnemonic = false, Margin = new Padding(0, 4, 0, 6) };
+                    content.Visible = false;
+                    link.LinkClicked += (_, _) =>
+                    {
+                        content.Visible = !content.Visible;
+                        link.Text = (content.Visible ? "▾  " : "▸  ") + title;
+                    };
+                    layout.Controls.Add(link);
+                    layout.Controls.Add(content);
+                }
+
+                var secrets = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(14, 0, 0, 6) };
+                var mono = new Font("Consolas", 9.5f, FontStyle.Bold);
+                foreach (var (name, how) in prompt.Secrets)
+                {
+                    var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 2) };
+                    row.Controls.Add(new Label { Text = "•  " + name, AutoSize = true, UseMnemonic = false, Font = mono, Margin = new Padding(0, 1, 6, 0) });
+                    row.Controls.Add(new Label { Text = how, AutoSize = true, UseMnemonic = false, ForeColor = muted, Margin = new Padding(0, 1, 0, 0) });
+                    secrets.Controls.Add(row);
+                }
+                Section("Secrets requested (" + prompt.Secrets.Count + ")", secrets);
+
+                if (prompt.ScriptLabel != null)
+                {
+                    var box = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
+                    box.Controls.Add(MakeLabel(prompt.ScriptLabel, null, muted));
+                    var code = new RichTextBox
+                    {
+                        Width = width,
+                        Height = 340,
+                        ReadOnly = true,
+                        BackColor = SystemColors.Window,
+                        // Long lines wrap, so nothing can hide past the right edge.
+                        WordWrap = true,
+                        ScrollBars = RichTextBoxScrollBars.Vertical,
+                        DetectUrls = false,
+                        BorderStyle = BorderStyle.FixedSingle,
+                    };
+                    code.Rtf = ScriptRtf(prompt.Tokens);
+                    box.Controls.Add(code);
+                    Section("View script", box);
+                }
+                else if (prompt.NoScript != null)
+                {
+                    layout.Controls.Add(MakeLabel("⚠  " + prompt.NoScript));
+                }
+                foreach (var warning in prompt.Warnings) layout.Controls.Add(MakeLabel("⚠  " + warning));
+                layout.Controls.Add(MakeLabel(prompt.Footer, null, muted));
+
+                var buttons = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+                var choices = onceOnly || prompt.Buttons != "grant"
+                    ? new[] { ("Deny", "deny"), ("Allow", "once") }
+                    : new[] { ("Deny", "deny"), ("Allow once", "once"), ("Always allow", "always") };
+                var allow = new List<Button>();
+                Button? deny = null;
+                foreach (var (label, value) in choices)
+                {
+                    var button = new Button { Text = label, AutoSize = true, MinimumSize = new Size(90, 0) };
+                    button.Click += (_, _) => { choice = value; form.Close(); };
+                    buttons.Controls.Add(button);
+                    if (value == "deny") { deny = button; form.AcceptButton = button; form.CancelButton = button; }
+                    else { button.Enabled = false; allow.Add(button); }
+                }
+                layout.Controls.Add(buttons);
+                form.Controls.Add(layout);
+                using (var enable = new System.Windows.Forms.Timer { Interval = 1_000 })
+                using (var giveUp = new System.Windows.Forms.Timer { Interval = 180_000 })
+                {
+                    enable.Tick += (_, _) => { enable.Stop(); allow.ForEach(b => b.Enabled = true); };
+                    giveUp.Tick += (_, _) => { choice = "deny"; form.Close(); };
+                    form.Shown += (_, _) =>
+                    {
+                        form.Activate();
+                        form.ActiveControl = deny;
+                        enable.Start();
+                        giveUp.Start();
+                    };
+                    form.ShowDialog();
+                }
+            }
+            return choice;
+        }
 
         /// <summary>Deny is the default and the cancel button; closing or 2 minutes without an answer denies.</summary>
         private static string Ask(string message, bool onceOnly)
