@@ -1,13 +1,34 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { itemsToSecrets, parseJsonObjects, readVaults, type OpItem } from '../src/onepassword.ts';
+import { itemsToSecrets, opJson, parseJsonObjects, readVaults, type OpItem } from '../src/onepassword.ts';
 import { saveConfig } from '../src/config.ts';
 import { syncedSecrets, syncVault } from '../src/secrets.ts';
 import { planSteps } from '../src/sync.ts';
 import { newStore, tempHome } from './support.ts';
 
 const unix = process.platform !== 'win32';
+
+test('opJson retries a desktop connection timeout once and only returns successful output', async () => {
+  const { p, cleanup } = await tempHome();
+  try {
+    const script = join(p.dir, 'fake-op.mjs');
+    await writeFile(script, `
+      import { existsSync, writeFileSync } from 'node:fs';
+      const marker = process.argv[2];
+      if (!existsSync(marker)) {
+        writeFileSync(marker, 'attempted');
+        console.log('incomplete output');
+        console.error('connecting to desktop app timed out');
+        process.exit(1);
+      }
+      console.log('[]');
+    `);
+    expect((await opJson(process.execPath, [script, join(p.dir, 'marker')], {}, 5000)).trim()).toBe('[]');
+  } finally {
+    await cleanup();
+  }
+});
 
 const items: OpItem[] = [
   {
