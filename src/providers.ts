@@ -41,7 +41,7 @@ export const PROVIDERS: Provider[] = [
     ],
     statusArgs: ['whoami'],
     signInHint:
-      'Turn on 1Password > Settings > Developer > "Integrate with 1Password CLI", or run: op signin',
+      'Open and unlock the 1Password desktop app. In Settings > Developer, enable "Integrate with 1Password CLI". Run op whoami in this terminal to verify access.',
   },
   {
     id: 'bitwarden',

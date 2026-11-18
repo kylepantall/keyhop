@@ -118,10 +118,13 @@ function accountArgs(config: Config): string[] {
 
 /** Runs `op … --format json`; errors carry op's stderr, never stdout. */
 export async function opJson(op: string, args: string[], config: Config, timeoutMs: number): Promise<string> {
-  const result = await runProcess(op, [...args, ...accountArgs(config), '--format', 'json'], {
-    timeoutMs,
-    maxBytes: MAX_OUTPUT,
-  });
+  const argv = [...args, ...accountArgs(config), '--format', 'json'];
+  const started = performance.now();
+  let result = await runProcess(op, argv, { timeoutMs, maxBytes: MAX_OUTPUT });
+  if (!result.timedOut && result.code !== 0 && /connecting to desktop app timed out/i.test(result.stderr)) {
+    const remaining = Math.floor(timeoutMs - (performance.now() - started));
+    if (remaining > 0) result = await runProcess(op, argv, { timeoutMs: remaining, maxBytes: MAX_OUTPUT });
+  }
   if (result.timedOut) throw new Error(`op ${args.slice(0, 2).join(' ')} timed out.`);
   if (result.code !== 0) throw new Error(result.stderr.trim() || `op ${args.slice(0, 2).join(' ')} exited ${result.code}`);
   if (result.truncated) throw new Error(`op ${args.slice(0, 2).join(' ')} printed more than 64 MB.`);
