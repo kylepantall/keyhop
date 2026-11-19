@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- Approve a plan once to run up to eight secret-backed commands or VPNHop requests in order. Biometric vaults prompt once for the plan. Sessions expire after ten minutes.
+- On Linux, macOS, or Windows, opt into automatic unlock with `keyhop setup --auto-auth`. For headless provisioning, add `--vault-only` and use `keyhop allow NAME COMMAND` to authorize individual credentials.
+- The Linux installer supports automatic vaults without a biometric helper. Existing biometric vaults keep their configured unlock method.
+- Retry transient 1Password desktop connection timeouts during sync.
+
 ## 0.9.0
 
 - The access dialog says who is asking and why: "Claude Code would like to run a script. It will have access to your secrets.", plus the caller's own reason (new `reason` on `run_with_secrets`, `--reason` on `keyhop run`), quoted and made inert.
