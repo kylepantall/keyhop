@@ -4,7 +4,7 @@ import * as ui from '@clack/prompts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSupportedPlatform, KeyExistsError } from './auth.ts';
+import { KeyExistsError, readKeyFile, supportsBiometricAuth } from './auth.ts';
 import { claudeRegistration, registerWithClaude } from './claude.ts';
 import { assertName, loadConfig, saveConfig } from './config.ts';
 import { formatChecks, runChecks } from './doctor.ts';
@@ -233,13 +233,24 @@ async function offerStarterScript(syncDir: string): Promise<void> {
 }
 
 export async function runSetup(store: VaultStore, args: string[] = []): Promise<number> {
-  ui.intro('keyhop setup');
-  if (!isSupportedPlatform()) {
-    ui.cancel('keyhop needs Touch ID (macOS) or Windows Hello (Windows).');
-    return 1;
-  }
+  if (args.some((arg) => !['--reset', '--auto-auth', '--vault-only'].includes(arg)))
+    throw new Error('Usage: keyhop setup [--auto-auth] [--vault-only] [--reset]');
   const reset = args.includes('--reset');
+  const vaultOnly = args.includes('--vault-only');
+  const requestedAuto = args.includes('--auto-auth');
+  const existing = store.initialized ? await readKeyFile(store.paths.key).catch((error: unknown) => {
+    if (!reset) throw error;
+    return undefined;
+  }) : undefined;
+  const autoAuth = requestedAuto || existing?.auth === 'auto';
+  if (requestedAuto && existing && existing.auth !== 'auto' && !reset)
+    throw new Error('This vault uses biometric unlock. To create a separate automatic vault, set KEYHOP_HOME to a new directory.');
+  if (!autoAuth && !supportsBiometricAuth())
+    throw new Error('Biometric unlock requires macOS or Windows. Create an automatic vault with keyhop setup --auto-auth.');
+
+  ui.intro('keyhop setup');
   if (reset) {
+    if (!process.stdin.isTTY) throw new Error('--reset needs an interactive terminal to confirm replacement of the vault.');
     const sure = bail(
       await ui.confirm({
         message: `Delete the vault in ${store.paths.dir} and start over? Secrets can be re-synced; allowlists are lost.`,
@@ -255,6 +266,7 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
       return 1;
     }
     const biometryOnly =
+      !autoAuth &&
       process.platform === 'darwin' &&
       bail(
         await ui.select({
@@ -265,9 +277,13 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
           ],
         })
       );
-    ui.log.step(process.platform === 'darwin' ? 'Creating your vault — confirm with Touch ID.' : 'Creating your vault — confirm with Windows Hello (twice).');
+    ui.log.step(autoAuth
+      ? 'Creating a vault with automatic unlock under the current OS account.'
+      : process.platform === 'darwin'
+        ? 'Creating your vault — confirm with Touch ID.'
+        : 'Creating your vault — confirm with Windows Hello (twice).');
     try {
-      await store.initialize({ biometryOnly, replace: reset });
+      await store.initialize({ autoAuth, biometryOnly, replace: reset });
     } catch (error) {
       // No key.json here, so the Hello key is left from a setup that didn't finish.
       if (!(error instanceof KeyExistsError)) throw error;
@@ -279,11 +295,17 @@ export async function runSetup(store: VaultStore, args: string[] = []): Promise<
         })
       );
       if (!replace) return 1;
-      await store.initialize({ biometryOnly, replace: true });
+      await store.initialize({ autoAuth, biometryOnly, replace: true });
     }
     ui.log.success(`Vault created in ${store.paths.dir}`);
   } else {
+    if (vaultOnly && autoAuth) await store.read();
     ui.log.info(`Using the existing vault in ${store.paths.dir}`);
+  }
+
+  if (vaultOnly) {
+    ui.outro('Vault ready. Run keyhop setup to link password tools, or add a sync script and run keyhop sync.');
+    return 0;
   }
 
   const config: Config = await loadConfig(store.paths);

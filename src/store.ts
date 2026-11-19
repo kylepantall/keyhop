@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { prepareKeyDirectory, readKeyFile } from './auth.ts';
 import { writePrivate, type Paths } from './paths.ts';
 import { decryptVault, deriveKek, emptyVault, encryptVault } from './vault.ts';
-import type { AuthAction, Authenticator, KeyFile, VaultData } from './types.ts';
+import type { AuthAction, Authenticator, KeyFile, VaultData, VaultSetupOptions } from './types.ts';
 
 const RECENT_PROMPT_MS = 60_000;
 
@@ -42,14 +43,15 @@ export class VaultStore {
    * Creates the platform key and an empty vault. Refuses while a key file
    * exists, so deleting vault.enc alone can't trick setup into replacing it.
    */
-  initialize(options: { biometryOnly: boolean; replace?: boolean }): Promise<void> {
+  initialize(options: VaultSetupOptions): Promise<void> {
     return this.exclusive(async () => {
       if (existsSync(this.paths.key) && !options.replace)
         throw new Error(`${this.paths.key} already exists. To start over (losing the vault), run: keyhop setup --reset`);
+      if (options.autoAuth) await prepareKeyDirectory(this.paths.key);
       const created = await this.auth.create(options);
       const key: KeyFile = {
         version: 1,
-        platform: process.platform as KeyFile['platform'],
+        platform: process.platform,
         salt: randomBytes(32).toString('base64'),
         ...created,
       };
@@ -76,7 +78,7 @@ export class VaultStore {
   confirm(action: AuthAction): Promise<void> {
     return this.exclusive(async () => {
       if (!this.initialized) throw new Error('No vault yet. Run: keyhop setup');
-      const key = JSON.parse(await readFile(this.paths.key, 'utf8')) as KeyFile;
+      const key = await readKeyFile(this.paths.key);
       this.remember(deriveKek(await this.auth.derive(key, action), Buffer.from(key.salt, 'base64')));
       try {
         decryptVault(await readFile(this.paths.vault, 'utf8'), this.kek!);
@@ -87,11 +89,11 @@ export class VaultStore {
     });
   }
 
-  /** Fresh biometric access for one approved plan, independent of the normal unlock cache. */
+  /** A fresh unlock for one approved plan, independent of the normal unlock cache. */
   lease(): Promise<VaultLease> {
     return this.exclusive(async () => {
       if (!this.initialized) throw new Error('No vault yet. Run: keyhop setup');
-      const key = JSON.parse(await readFile(this.paths.key, 'utf8')) as KeyFile;
+      const key = await readKeyFile(this.paths.key);
       const kek = deriveKek(await this.auth.derive(key, 'grant'), Buffer.from(key.salt, 'base64'));
       let closed = false;
       return {
@@ -125,7 +127,7 @@ export class VaultStore {
     // A rule change needs a fresh prompt, unless the user just answered one.
     const stale = Date.now() - this.promptedAt > RECENT_PROMPT_MS;
     if (!this.kek || (action === 'change' && stale)) {
-      const key = JSON.parse(await readFile(this.paths.key, 'utf8')) as KeyFile;
+      const key = await readKeyFile(this.paths.key);
       this.remember(deriveKek(await this.auth.derive(key, action), Buffer.from(key.salt, 'base64')));
     }
     try {

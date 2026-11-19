@@ -105,7 +105,7 @@ function reviewOf(steps: PreparedStep[], purpose: string, client: string): Promp
     warnings: [],
     secrets: [],
     plan: lines,
-    footer: 'Allow and authenticate once to run these steps in order. This session expires in 10 minutes.',
+    footer: 'Allow to run these steps in order. Biometric vaults ask you to authenticate once. This session expires in 10 minutes.',
     buttons: 'once',
   };
 }

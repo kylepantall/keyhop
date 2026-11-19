@@ -22,7 +22,10 @@ const HELP = `keyhop ${VERSION} — secrets Claude can use but never read
 
 Usage: keyhop <command>
 
-  setup [--reset]               Guided setup: vault, password tools, allowlists, first sync
+  setup [--auto-auth] [--vault-only] [--reset]
+                                Set up the vault and link password tools.
+                                --auto-auth: create a vault with automatic unlock for this account
+                                --vault-only: skip the password tool and MCP setup wizard
   sync [--full]                 Pull secrets from linked tools and sync.d scripts
                                 (1Password vaults fetch only changed items; --full refetches all)
   list                          Show secret names, sources and allowed commands (no values)
@@ -38,15 +41,15 @@ Usage: keyhop <command>
                                 Run COMMAND with secrets (as environment variables, on stdin, or
                                 {{file:NAME}} in an argument). Commands not yet allowed ask first.
                                 --bypass: a shell or interpreter (python3, node …) for this one run,
-                                after a warning dialog and Touch ID; never remembered. The dialog
+                                after a warning dialog and the configured unlock; never remembered. The dialog
                                 shows the script it will run. --reason: why, shown in the dialog
   client add NAME --runtime PATH --entry PATH --root DIR [--prefix PREFIX_]
                                 Pin a suite client (vpnhop, hopsql …) so it may read and write
-                                secrets starting with its prefix (dialog + Touch ID)
+                                secrets starting with its prefix (dialog + configured unlock)
   client list [--json]          Show suite clients
   client remove NAME            Unpin a suite client (its secrets stay)
   client get | put              For suite clients: JSON on stdin, JSON on stdout
-  doctor [--json]               Check biometrics, vault, tools, scripts and Claude Code
+  doctor [--json]               Check authentication, vault, tools, scripts and Claude Code
   update [--check] [--ref R]    Install the latest version from GitHub
   serve                         Run the MCP server (stdio); Claude Code starts this
 
@@ -209,8 +212,7 @@ async function main(argv: string[]): Promise<number> {
       if (!program || flags.length) throw new Error(`Usage: keyhop run [--bypass] [--secrets A,B] [--stdin NAME] [--reason TEXT] [--timeout S] -- COMMAND ARGS...${flags.length ? ` (unknown: ${flags.join(' ')})` : ''}`);
       if (timeout && !/^\d+$/.test(timeout)) throw new Error('--timeout needs a number of seconds.');
       const dialog = testSeamEnabled() ? testDialog() : platformDialog();
-      if (!dialog) throw new Error('keyhop run needs the macOS or Windows access dialog.');
-      const gate = new AccessGate(approverFor(dialog));
+      const gate = dialog ? new AccessGate(approverFor(dialog)) : undefined;
       const result = await runWithSecrets(
         store(),
         {

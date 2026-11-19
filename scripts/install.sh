@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Installs keyhop from GitHub on macOS: a private Bun if needed, the app, the
-# Touch ID helper (compiled here with swiftc) and a launcher in ~/.local/bin.
+# Installs keyhop from GitHub on macOS or Linux: a private Bun if needed, the
+# app, a launcher and, on macOS, the Touch ID helper built with swiftc.
 # KEYHOP_SOURCE_DIR installs from a local checkout instead of downloading.
 KEYHOP_REPO="${KEYHOP_REPO:-kylepantall/keyhop}"
 BUN_VERSION=1.4.3
@@ -48,10 +48,12 @@ main() {
     return 1
   fi
   [[ -n "${HOME:-}" ]] || { printf 'HOME must be set.\n' >&2; return 1; }
-  if [[ "$(uname -s)" != Darwin ]]; then
-    printf 'keyhop needs Touch ID (macOS) or Windows Hello (use install.ps1 on Windows).\n' >&2
-    return 1
-  fi
+  local platform
+  case "$(uname -s)" in
+    Darwin) platform=darwin ;;
+    Linux) platform=linux ;;
+    *) printf 'Use install.sh on macOS or Linux, or install.ps1 on Windows.\n' >&2; return 1 ;;
+  esac
   local source_label="$KEYHOP_REPO@$ref"
   [[ -z "${KEYHOP_SOURCE_DIR:-}" ]] || source_label="$KEYHOP_SOURCE_DIR"
   printf 'keyhop installer — %s\n' "$source_label"
@@ -61,11 +63,13 @@ main() {
   trap 'rm -rf -- "$KEYHOP_INSTALL_TEMP"' EXIT
 
   step 'Checking tools'
-  command -v swiftc >/dev/null 2>&1 || {
-    printf 'swiftc not found. Install the Xcode command line tools, then rerun:\n  xcode-select --install\n' >&2
-    return 1
-  }
-  info "swiftc: $(command -v swiftc)"
+  if [[ "$platform" == darwin ]]; then
+    command -v swiftc >/dev/null 2>&1 || {
+      printf 'swiftc not found. Install the Xcode command line tools, then rerun:\n  xcode-select --install\n' >&2
+      return 1
+    }
+    info "swiftc: $(command -v swiftc)"
+  fi
   if command -v op >/dev/null 2>&1; then info "1Password CLI: $(command -v op)"
   else info '1Password CLI not found (optional): brew install 1password-cli'; fi
 
@@ -91,7 +95,8 @@ main() {
       x86_64) arch=x64-baseline ;;
       *) printf 'Unsupported architecture. Install Bun %s+ first.\n' "$BUN_VERSION" >&2; return 1 ;;
     esac
-    archive="bun-darwin-$arch.zip"
+    archive="bun-$platform-$arch.zip"
+    command -v unzip >/dev/null 2>&1 || { printf 'unzip not found; install it and rerun.\n' >&2; return 1; }
     info "Downloading a private Bun $BUN_VERSION ($archive) and verifying its checksum"
     curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 "$base/SHASUMS256.txt" -o "$temp_dir/SHASUMS256.txt"
     expected="$(awk -v file="$archive" '$2 == file || $2 == ("*" file) {print $1; exit}' "$temp_dir/SHASUMS256.txt")"
@@ -129,10 +134,12 @@ main() {
   (cd "$staging" && quiet "$bun_bin" install --frozen-lockfile --production --ignore-scripts)
   info 'Done'
 
-  step 'Building the Touch ID helper'
-  mkdir -p "$staging/native/build"
-  (cd "$staging" && quiet swiftc -O native/macos/keyhop-auth.swift -o native/build/keyhop-auth)
-  info 'Done'
+  if [[ "$platform" == darwin ]]; then
+    step 'Building the Touch ID helper'
+    mkdir -p "$staging/native/build"
+    (cd "$staging" && quiet swiftc -O native/macos/keyhop-auth.swift -o native/build/keyhop-auth)
+    info 'Done'
+  fi
 
   rm -rf -- "$install_dir/app.old"
   [[ ! -d "$install_dir/app" ]] || mv "$install_dir/app" "$install_dir/app.old"
@@ -183,7 +190,9 @@ main() {
   elif [[ -t 1 ]]; then
     tty_dev="$(tty <&1 2>/dev/null)" || tty_dev=''
   fi
-  if [[ "$run_setup" == true && ! -f "$data_dir/vault.enc" && "$tty_dev" == /dev/* && "$tty_dev" != /dev/tty ]]; then
+  if [[ "$platform" == linux && ! -f "$data_dir/vault.enc" ]]; then
+    printf '\nkeyhop installed. Choose automatic unlock with: keyhop setup --auto-auth\n'
+  elif [[ "$run_setup" == true && ! -f "$data_dir/vault.enc" && "$tty_dev" == /dev/* && "$tty_dev" != /dev/tty ]]; then
     step 'Setup'
     "$bin_dir/keyhop" setup <"$tty_dev" || info 'Setup did not finish; rerun it any time with: keyhop setup'
   else

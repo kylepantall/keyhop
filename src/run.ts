@@ -29,7 +29,7 @@ export interface RunRequest {
   timeoutSeconds?: number;
   /**
    * Ask the user to let a shell or interpreter (python3, node, bash …) have the
-   * secrets for this one run. Always a dialog plus Touch ID / Windows Hello;
+   * secrets for this one run. Always requires approval in a dialog;
    * never remembered, and never in an argument.
    */
   bypassGuard?: boolean;
@@ -94,8 +94,7 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
     if (!request.bypassGuard)
       throw new Error(
         `${error.message} If the user asked for this, request a one-time bypass (bypassGuard: true, or ` +
-          'keyhop run --bypass): keyhop then asks them to approve this one run (dialog plus Touch ID / ' +
-          'Windows Hello). It is never remembered.'
+          'keyhop run --bypass). Keyhop asks them to approve this run in a dialog. It is never remembered.'
       );
     assertAllowable(path, { bypass: true });
     bypass = true;
@@ -217,8 +216,8 @@ export async function runApprovedCommand(
 
 /**
  * A shell or interpreter, for one run: the user sees a warning dialog (Deny /
- * Allow, no "always") and confirms with Touch ID / Windows Hello. Nothing is
- * saved, so the next run asks again.
+ * Allow, no "always"). The configured vault authentication applies. Nothing
+ * is saved, so the next run asks again.
  */
 async function bypassOnce(
   store: VaultStore,
@@ -234,7 +233,7 @@ async function bypassOnce(
   if (inArg.length)
     throw new Error(`${inArg.join(', ')} may not be placed in an argument with a bypass. Use {{file:NAME}}, stdin or an environment variable.`);
   if (!options.gate)
-    throw new Error('A one-time bypass needs the user to approve it in a dialog, and access requests are turned off here.');
+    throw new Error('A one-time bypass needs the user to approve it in a dialog. Access dialogs are unavailable or disabled.');
   // Pin now, so the file the user approves is the file that runs.
   const pinned = await pinExecutable(path, { bypass: true });
   const outcome = await options.gate.ask(

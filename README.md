@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/kylepantall/keyhop/actions/workflows/ci.yml/badge.svg)](https://github.com/kylepantall/keyhop/actions/workflows/ci.yml) [![MIT license](https://img.shields.io/badge/license-MIT-716e65)](LICENSE)
 
-Let Claude **use** your API keys without **seeing** them. keyhop syncs secrets from 1Password (and other password tools, or your own scripts) into a local encrypted vault that unlocks with **Touch ID** or **Windows Hello**. Claude runs commands with those secrets as environment variables. It never gets their values back.
+Let Claude **use** your API keys without **seeing** them. keyhop syncs secrets from 1Password (and other password tools, or your own scripts) into a local encrypted vault. Use **Touch ID**, **Windows Hello**, or opt into **automatic unlock** under your local account. Claude runs commands with those secrets as environment variables. It never gets their values back.
 
 ## Install
 
-**macOS** (needs the Xcode command line tools: `xcode-select --install`)
+**macOS and Linux** (macOS needs the Xcode command line tools: `xcode-select --install`)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.sh | bash
@@ -20,12 +20,14 @@ curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/ins
 
 On Windows this installs the latest [release](https://github.com/kylepantall/keyhop/releases): `keyhop.exe` plus `keyhop-hello.exe` (the Windows Hello helper), checked against the release's `SHA256SUMS`. No PowerShell runs after install. You can also download `keyhop-windows-x64.zip` yourself, unzip it, and run `keyhop.exe setup`.
 
-On a first install the installer starts `keyhop setup`, which:
+On a first install on macOS or Windows the installer starts `keyhop setup`, which:
 
 1. creates the vault (one Touch ID / Hello prompt)
 2. finds the password tools you already have and lets you pick items from them
 3. asks which commands each secret may be given to
 4. runs the first sync and registers keyhop with Claude Code
+
+On Linux, choose automatic unlock after installing.
 
 | Option | macOS / Linux | Windows |
 |---|---|---|
@@ -33,11 +35,34 @@ On a first install the installer starts `keyhop setup`, which:
 | Skip the setup wizard | `--no-setup` | `-NoSetup` |
 | Install a branch, tag or version | `bash -s -- v0.2.0` | `-Version 0.4.0` (releases only) |
 
+### Automatic unlock
+
+For a machine without Touch ID or Windows Hello, create a vault with automatic unlock.
+
+```sh
+keyhop setup --auto-auth
+```
+
+For headless provisioning, create a dedicated vault and link only the credentials that machine needs. For example, with 1Password CLI already signed in:
+
+```sh
+keyhop setup --auto-auth --vault-only
+keyhop add GH_TOKEN 'op://Automation/GitHub/token'
+keyhop sync
+keyhop allow GH_TOKEN gh
+```
+
+The rule authorizes `gh` to receive `GH_TOKEN` as an environment variable. Other credentials and executables have their own rules. You can also provision selected credentials with a `sync.d` script. Keyhop remembers the vault's unlock mode across restarts. To keep an existing biometric vault, set `KEYHOP_HOME` to a separate directory for the automatic vault and use the same directory when starting its MCP server.
+
+Automatic unlock uses an owner-only key file on Linux and macOS. On Windows, DPAPI protects the key under the current Windows account. A process with access to that account and the vault files can unlock the vault. On Linux and macOS, a backup containing both `key.json` and `vault.enc` contains everything needed to decrypt the vault. Keep both files private.
+
+Allowlisted commands can run headlessly. New access grants, script bypasses, suite client registration and plan sessions still require an approval dialog. The dialogs are available on macOS and Windows.
+
 ## Commands
 
 | Command | Does |
 |---|---|
-| `keyhop setup` | Guided setup; rerun it to link more secrets |
+| `keyhop setup [--auto-auth] [--vault-only]` | Create a vault or link more secrets |
 | `keyhop sync` | Pull everything from linked tools and `sync.d` scripts |
 | `keyhop list` | Names, sources and allowed commands (never values) |
 | `keyhop add NAME REF [--allow gh,npm]` | Link one secret |
@@ -97,7 +122,7 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 
 ### One approval for a plan
 
-Ask your MCP agent to use a Keyhop session for a multi-step task. Give it the secret names it should use. For example, “Use a Keyhop plan with `GH_TOKEN` to check `gh auth status` and list open PRs in my repository.” Keyhop shows every command, exact arguments, working folder and secret delivery method in one local dialog. Approve the plan and use Touch ID or Windows Hello once. The agent then runs the steps in order by calling `run_session_step` with the returned session ID and step number.
+Ask your MCP agent to use a Keyhop session for a multi-step task. Give it the secret names it should use. For example, “Use a Keyhop plan with `GH_TOKEN` to check `gh auth status` and list open PRs in my repository.” Keyhop shows every command, exact arguments, working folder and secret delivery method in one local dialog. Approve the plan. Biometric vaults also ask for Touch ID or Windows Hello once. The agent then runs the steps in order by calling `run_session_step` with the returned session ID and step number.
 
 - Each session covers up to eight steps for ten minutes and belongs to one MCP connection. Steps run once. A failed step, finishing the plan, closing the connection, or locking the vault closes the session.
 - Command steps accept environment variables, stdin and `{{file:NAME}}`. Keyhop checks the approved program and credential before use. If you explicitly request an interpreter bypass, the code must be inspectable and appears in the plan.

@@ -34,13 +34,15 @@ export interface SecretSource {
 
 export type ProviderId = '1password' | 'bitwarden' | 'lastpass' | 'pass' | 'keychain';
 
-/** key.json: how to re-derive the vault key with the platform authenticator. */
+/** key.json: material for the platform authenticator or the explicitly selected automatic unlock. */
 export interface KeyFile {
   version: 1;
-  platform: 'darwin' | 'win32';
+  platform: NodeJS.Platform;
+  /** Missing means Touch ID or Windows Hello, including vaults created before automatic unlock existed. */
+  auth?: 'auto';
   /** HKDF salt, base64. */
   salt: string;
-  /** macOS: software P-256 public key to agree with. Windows: challenge to sign. Base64. */
+  /** Biometric peer or challenge. With auto auth, a local secret (DPAPI-wrapped on Windows). Base64. */
   peer: string;
   /** macOS only: Secure Enclave key blob (usable only on this Mac's Secure Enclave). */
   seKey?: string;
@@ -160,11 +162,17 @@ export interface SyncCacheState {
 /** `grant`: confirms an access request the user just approved in keyhop's dialog. */
 export type AuthAction = 'unlock' | 'change' | 'grant' | 'bypass';
 
-/** Platform biometric backend (Secure Enclave + Touch ID, or Windows Hello). */
+export interface VaultSetupOptions {
+  biometryOnly: boolean;
+  autoAuth?: boolean;
+  /** May overwrite an existing Windows Hello key. */
+  replace?: boolean;
+}
+
+/** Derives the vault secret with the authentication mode recorded at setup. */
 export interface Authenticator {
-  /** `replace` overwrites an existing Windows Hello key; macOS keys are never shared. */
-  create(options: { biometryOnly: boolean; replace?: boolean }): Promise<Pick<KeyFile, 'peer' | 'seKey' | 'biometryOnly'>>;
-  /** Prompts the user, then returns a stable secret for this key file. */
+  create(options: VaultSetupOptions): Promise<Pick<KeyFile, 'auth' | 'peer' | 'seKey' | 'biometryOnly'>>;
+  /** Returns a stable secret, after biometric confirmation when configured. */
   derive(key: KeyFile, action: AuthAction): Promise<Buffer>;
 }
 
