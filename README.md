@@ -89,8 +89,22 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 |---|---|
 | `list_secrets` | Names, sources, allowed programs and how each may receive the secret |
 | `run_with_secrets` | Exit code + redacted stdout/stderr |
+| `open_session` | One local approval and biometric check for an ordered plan |
+| `run_session_step` | Result of the next approved step |
+| `close_session` | Revokes the plan and stops a running step |
 | `sync_secrets` | Steps run and counts |
-| `lock_vault` | Forgets the key until the next prompt |
+| `lock_vault` | Forgets the key and closes the session on this connection |
+
+### One approval for a plan
+
+Ask your MCP agent to use a Keyhop session for a multi-step task. Give it the secret names it should use. For example, “Use a Keyhop plan with `GH_TOKEN` to check `gh auth status` and list open PRs in my repository.” Keyhop shows every command, exact arguments, working folder and secret delivery method in one local dialog. Approve the plan and use Touch ID or Windows Hello once. The agent then runs the steps in order by calling `run_session_step` with the returned session ID and step number.
+
+- Each session covers up to eight steps for ten minutes and belongs to one MCP connection. Steps run once. A failed step, finishing the plan, closing the connection, or locking the vault closes the session.
+- Command steps accept environment variables, stdin and `{{file:NAME}}`. Keyhop checks the approved program and credential before use. If you explicitly request an interpreter bypass, the code must be inspectable and appears in the plan.
+- To include a VPNHop request, the agent calls VPNHop's `session_profile` for the profile fingerprint and secret names. It includes those in a `vpn_http` step with the exact method, URL, headers and optional text body. The pinned VPNHop install receives only that step's named credentials. TLS verification and the profile's host allowlist apply. Redirects are returned for review.
+- Ordinary Keyhop tools use a separate unlock. Looking up unknown vault names with `list_secrets` can require that unlock. Review the new plan if commands, destinations, or other approved inputs need to change.
+
+Keyhop uses the native helper for plan review. Update the Keyhop install and the registered VPNHop install together for mixed plans. For Codex, register the Keyhop MCP server with `codex mcp add keyhop -- keyhop serve` if it is not already configured.
 
 ### Four ways to hand a program a secret
 

@@ -7,6 +7,11 @@ import type { AuthAction, Authenticator, KeyFile, VaultData } from './types.ts';
 
 const RECENT_PROMPT_MS = 60_000;
 
+export interface VaultLease {
+  read(): Promise<VaultData>;
+  close(): void;
+}
+
 /**
  * The encrypted vault plus the in-memory key. The key is kept for `ttlMs`
  * after a prompt (0: for the life of the process); changes to access rules
@@ -79,6 +84,27 @@ export class VaultStore {
         this.lock();
         throw error;
       }
+    });
+  }
+
+  /** Fresh biometric access for one approved plan, independent of the normal unlock cache. */
+  lease(): Promise<VaultLease> {
+    return this.exclusive(async () => {
+      if (!this.initialized) throw new Error('No vault yet. Run: keyhop setup');
+      const key = JSON.parse(await readFile(this.paths.key, 'utf8')) as KeyFile;
+      const kek = deriveKek(await this.auth.derive(key, 'grant'), Buffer.from(key.salt, 'base64'));
+      let closed = false;
+      return {
+        read: async () => {
+          const encrypted = await readFile(this.paths.vault, 'utf8');
+          if (closed) throw new Error('The session is closed.');
+          return decryptVault(encrypted, kek);
+        },
+        close: () => {
+          closed = true;
+          kek.fill(0);
+        },
+      };
     });
   }
 

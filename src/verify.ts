@@ -107,6 +107,27 @@ function realOrNull(path: string): string | null {
   }
 }
 
+/** Rechecks the paths and code before keyhop launches a pinned client itself. */
+export async function verifyClientFiles(pin: ClientPin): Promise<void> {
+  if (realOrNull(pin.root.realPath) !== pin.root.realPath ||
+      realOrNull(pin.entry.realPath) !== pin.entry.realPath ||
+      realOrNull(pin.runtime.realPath) !== pin.runtime.realPath)
+    throw new VerifyError('root', 'A registered client path changed.');
+  if ((await hashFile(pin.runtime.realPath).catch(() => null)) !== pin.runtime.sha256)
+    throw new VerifyError('runtime-hash', `${pin.runtime.realPath} has changed since the client was added.`);
+  await verifyClientTree(pin);
+}
+
+async function verifyClientTree(pin: ClientPin): Promise<void> {
+  assertSafeRoot(pin.root.realPath);
+  const current = await treeHash(pin.root.realPath).catch((error: Error) => {
+    if (error instanceof VerifyError) throw error;
+    throw new VerifyError('tree', `${pin.root.realPath} can't be read.`);
+  });
+  if (current !== pin.root.treeHash)
+    throw new VerifyError('tree', `files under ${pin.root.realPath} changed since the client was added.`);
+}
+
 /**
  * Checks every rule; throws VerifyError naming the first that fails.
  * `tree: false` skips the tree hash (when it was just checked against the same pin).
@@ -158,14 +179,8 @@ export async function verifyParent(
     if (found.length) throw new VerifyError('bunfig', `${found.join(', ')} could preload code into the client.`);
   }
 
-  assertSafeRoot(pin.root.realPath);
-  if (options.tree !== false) {
-    const current = await treeHash(pin.root.realPath).catch((error: Error) => {
-      if (error instanceof VerifyError) throw error;
-      throw new VerifyError('tree', `${pin.root.realPath} can't be read.`);
-    });
-    if (current !== pin.root.treeHash) throw new VerifyError('tree', `files under ${pin.root.realPath} changed since the client was added.`);
-  }
+  if (options.tree === false) assertSafeRoot(pin.root.realPath);
+  else await verifyClientTree(pin);
 }
 
 // ---------------------------------------------------------------------------

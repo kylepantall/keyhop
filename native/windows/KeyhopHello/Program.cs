@@ -78,6 +78,9 @@ namespace Keyhop
                     case "ask" when Array.IndexOf(args, "--prompt") >= 0:
                         Console.WriteLine(AskPrompt(ReadPrompt(Console.In.ReadToEnd()), Array.IndexOf(args, "--once") >= 0));
                         return 0;
+                    case "ask-plan":
+                        Console.WriteLine(AskPrompt(ReadPrompt(Console.In.ReadToEnd()), true, plan: true));
+                        return 0;
                     case "ask":
                         Console.WriteLine(Ask(Environment.GetEnvironmentVariable("KEYHOP_ASK_MESSAGE") ?? "", Array.IndexOf(args, "--once") >= 0));
                         return 0;
@@ -358,8 +361,9 @@ namespace Keyhop
         /// the user can open. Deny is the default and the cancel button; closing, Escape or
         /// 3 minutes without an answer denies, and Allow only works after a second.
         /// </summary>
-        private static string AskPrompt(PromptData prompt, bool onceOnly)
+        private static string AskPrompt(PromptData prompt, bool onceOnly, bool plan = false)
         {
+            if (plan && (prompt.Tokens.Count == 0 || prompt.Buttons != "once")) return "deny";
             Application.EnableVisualStyles();
             const int width = 620;
             var choice = "deny";
@@ -409,25 +413,28 @@ namespace Keyhop
                     layout.Controls.Add(content);
                 }
 
-                var secrets = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(14, 0, 0, 6) };
-                var mono = new Font("Consolas", 9.5f, FontStyle.Bold);
-                foreach (var (name, how) in prompt.Secrets)
+                if (!plan)
                 {
-                    var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 2) };
-                    row.Controls.Add(new Label { Text = "•  " + name, AutoSize = true, UseMnemonic = false, Font = mono, Margin = new Padding(0, 1, 6, 0) });
-                    row.Controls.Add(new Label { Text = how, AutoSize = true, UseMnemonic = false, ForeColor = muted, Margin = new Padding(0, 1, 0, 0) });
-                    secrets.Controls.Add(row);
+                    var secrets = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(14, 0, 0, 6) };
+                    var mono = new Font("Consolas", 9.5f, FontStyle.Bold);
+                    foreach (var (name, how) in prompt.Secrets)
+                    {
+                        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 2) };
+                        row.Controls.Add(new Label { Text = "•  " + name, AutoSize = true, UseMnemonic = false, Font = mono, Margin = new Padding(0, 1, 6, 0) });
+                        row.Controls.Add(new Label { Text = how, AutoSize = true, UseMnemonic = false, ForeColor = muted, Margin = new Padding(0, 1, 0, 0) });
+                        secrets.Controls.Add(row);
+                    }
+                    Section("Secrets requested (" + prompt.Secrets.Count + ")", secrets);
                 }
-                Section("Secrets requested (" + prompt.Secrets.Count + ")", secrets);
 
-                if (prompt.ScriptLabel != null)
+                if (plan || prompt.ScriptLabel != null)
                 {
                     var box = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
-                    box.Controls.Add(MakeLabel(prompt.ScriptLabel, null, muted));
+                    if (prompt.ScriptLabel != null) box.Controls.Add(MakeLabel(prompt.ScriptLabel, null, muted));
                     var code = new RichTextBox
                     {
                         Width = width,
-                        Height = 340,
+                        Height = plan ? 260 : 340,
                         ReadOnly = true,
                         BackColor = SystemColors.Window,
                         // Long lines wrap, so nothing can hide past the right edge.
@@ -438,7 +445,8 @@ namespace Keyhop
                     };
                     code.Rtf = ScriptRtf(prompt.Tokens);
                     box.Controls.Add(code);
-                    Section("View script", box);
+                    if (plan) layout.Controls.Add(box);
+                    else Section("View script", box);
                 }
                 else if (prompt.NoScript != null)
                 {
