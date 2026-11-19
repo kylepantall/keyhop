@@ -7,8 +7,7 @@
  *   isn't the default data folder, and a git checkout: installs (source
  *   tarball, `git ls-files` copy, or the compiled Windows release) have no .git;
  * - it only derives a key for key files it created itself (a marker peer and
- *   no Secure Enclave blob). A real vault's key comes from the Secure Enclave /
- *   Hello key, which this never touches, so its AES-GCM vault won't decrypt.
+ *   no Secure Enclave blob). It refuses real biometric and automatic vaults.
  */
 
 import { createHash } from 'node:crypto';
@@ -41,7 +40,8 @@ export function testAuthenticator(): Authenticator {
       return { peer: TEST_PEER };
     },
     async derive(key: KeyFile) {
-      if (key.peer !== TEST_PEER || key.seKey) throw new Error('The test authenticator only opens vaults it created.');
+      if (key.auth || key.peer !== TEST_PEER || key.seKey)
+        throw new Error('The test authenticator only opens vaults it created.');
       if (process.env.KEYHOP_TEST_CANCEL === '1') {
         const { AuthCancelledError } = await import('./auth.ts');
         throw new AuthCancelledError('Authentication was cancelled.');

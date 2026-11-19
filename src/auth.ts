@@ -88,10 +88,14 @@ async function runHelper(args: string[], input: object): Promise<string> {
 }
 
 export function platformAuthenticator(): Authenticator {
-  // Auto-auth vaults always use the real automatic backend. The test backend only opens its own throwaway vaults.
+  // A fake approval dialog is only safe when the backend can open test vaults alone.
   const test = testSeamEnabled() ? testAuthenticator() : undefined;
   return {
     async create({ autoAuth, biometryOnly, replace }) {
+      if (test) {
+        if (autoAuth) throw new Error('Disable KEYHOP_TEST_AUTH to create an automatic vault.');
+        return test.create({ biometryOnly, replace });
+      }
       if (autoAuth) {
         const secret = randomBytes(32);
         try {
@@ -103,7 +107,6 @@ export function platformAuthenticator(): Authenticator {
           secret.fill(0);
         }
       }
-      if (test) return test.create({ biometryOnly, replace });
       requireBiometricPlatform();
       const flags = [...(biometryOnly ? ['--biometry-only'] : []), ...(replace ? ['--replace'] : [])];
       const out = await runHelper(['create', ...flags], {});
@@ -111,7 +114,7 @@ export function platformAuthenticator(): Authenticator {
       return { peer: created.peer, seKey: created.seKey, biometryOnly };
     },
     async derive(key: KeyFile, action: AuthAction) {
-      if (key.auth !== 'auto' && test) return test.derive(key, action);
+      if (test) return test.derive(key, action);
       if (key.platform !== process.platform)
         throw new Error(`This vault was created on ${key.platform}; it cannot be unlocked here.`);
       if (key.auth === 'auto') {

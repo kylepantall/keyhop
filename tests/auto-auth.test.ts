@@ -47,6 +47,13 @@ test('the CLI creates an automatic vault and opens it in a fresh process', async
     const again = await command(home.p.dir, 'setup', '--vault-only');
     expect(again.code).toBe(0);
     expect(JSON.parse(await readFile(home.p.key, 'utf8'))).toEqual(file);
+
+    const fake = await runProcess(process.execPath, [cli, 'list'], {
+      env: { ...process.env, NODE_ENV: 'test', KEYHOP_HOME: home.p.dir, KEYHOP_TEST_AUTH: '1', KEYHOP_TEST_DIALOG: 'always' },
+      timeoutMs: 12_000,
+    });
+    expect(fake.code).toBe(1);
+    expect(fake.stderr).toContain('only opens vaults it created');
   } finally {
     await home.cleanup();
   }
