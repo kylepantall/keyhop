@@ -75,6 +75,10 @@ namespace Keyhop
                         RequireHello();
                         Console.WriteLine(Derive(Console.In.ReadToEnd()));
                         return 0;
+                    case "protect-auto-key":
+                    case "unprotect-auto-key":
+                        Console.WriteLine(AutoKey(Console.In.ReadToEnd(), command == "protect-auto-key"));
+                        return 0;
                     case "ask" when Array.IndexOf(args, "--prompt") >= 0:
                         Console.WriteLine(AskPrompt(ReadPrompt(Console.In.ReadToEnd()), Array.IndexOf(args, "--once") >= 0));
                         return 0;
@@ -90,7 +94,7 @@ namespace Keyhop
                         ServePipe(args[1]);
                         return 0;
                     default:
-                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant|bypass> | ask [--once] [--prompt] | pipe <name>");
+                        throw new ExitException("Usage: keyhop-hello probe | selftest | create [--replace] | derive <unlock|change|grant|bypass> | protect-auto-key | unprotect-auto-key | ask [--once] [--prompt] | ask-plan | pipe <name>");
                 }
             }
             catch (ExitException error)
@@ -133,16 +137,42 @@ namespace Keyhop
             return "{\"peer\":\"" + Convert.ToBase64String(peer) + "\"}";
         }
 
-        private static string Derive(string input)
+        private static byte[] ReadPeer(string input)
         {
             var match = Regex.Match(input, "\"peer\"\\s*:\\s*\"([A-Za-z0-9+/=]+)\"");
             if (!match.Success) throw new ExitException("Input needs peer.");
-            var challenge = Convert.FromBase64String(match.Groups[1].Value);
+            return Convert.FromBase64String(match.Groups[1].Value);
+        }
+
+        private static string Derive(string input)
+        {
+            var challenge = ReadPeer(input);
             var opened = KeyCredentialManager.OpenAsync(KeyName).AsTask().GetAwaiter().GetResult();
             AssertStatus(opened.Status.ToString());
             var signed = opened.Credential.RequestSignAsync(challenge.AsBuffer()).AsTask().GetAwaiter().GetResult();
             AssertStatus(signed.Status.ToString());
             return Convert.ToBase64String(signed.Result.ToArray());
+        }
+
+        private static string AutoKey(string input, bool protect)
+        {
+            var key = ReadPeer(input);
+            var entropy = Encoding.UTF8.GetBytes("keyhop-auto-v1");
+            byte[]? result = null;
+            try
+            {
+                if (protect && key.Length != 32) throw new ExitException("Auto auth requires a 32-byte key.");
+                result = protect
+                    ? ProtectedData.Protect(key, entropy, DataProtectionScope.CurrentUser)
+                    : ProtectedData.Unprotect(key, entropy, DataProtectionScope.CurrentUser);
+                if (!protect && result.Length != 32) throw new ExitException("Invalid automatic vault key.");
+                return Convert.ToBase64String(result);
+            }
+            finally
+            {
+                Array.Clear(key, 0, key.Length);
+                if (result != null) Array.Clear(result, 0, result.Length);
+            }
         }
 
         /// <summary>

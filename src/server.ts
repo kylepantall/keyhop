@@ -30,13 +30,12 @@ export function createServer(store: VaultStore, gate?: AccessGate, dialog?: Dial
       instructions:
         'keyhop holds API keys and passwords you can use but never read. Call list_secrets to see names and ' +
         'which commands each may be given to, then run_with_secrets to run one of those commands with the ' +
-        'secrets as environment variables, on stdin, or as a {{file:NAME}} path. Output is redacted. Unlocking prompts the user for Touch ID or ' +
-        'Windows Hello. Only the user can change which commands a secret may be used with: if a secret is ' +
-        'not allowed for a program, keyhop may ask the user directly (a dialog plus Touch ID / Windows ' +
-        'Hello) and the call waits for their answer. Do not retry a denied request.' +
+        'secrets as environment variables, on stdin, or as a {{file:NAME}} path. Output is redacted. Keyhop uses the ' +
+        'configured vault authentication. Only the user can authorize additional programs. Keyhop asks the user ' +
+        'when access dialogs are available. Do not retry a denied request.' +
         (session
           ? ' For a multi-step task, use open_session before any step is run. It shows the user the entire plan for one ' +
-            'approval and biometric check. Then use run_session_step in order. Use VPNHop session_profile to prepare ' +
+            'approval. Biometric vaults also prompt once to unlock. Then use run_session_step in order. Use VPNHop session_profile to prepare ' +
             'any vpn_http steps. Keep the session ID in this connection and close the session if the plan changes.'
           : ''),
     }
@@ -49,7 +48,7 @@ export function createServer(store: VaultStore, gate?: AccessGate, dialog?: Dial
       {
         title: 'Approve a Keyhop plan',
         description:
-          'Shows all exact command and VPNHop HTTP steps for one local approval and biometric check. ' +
+          'Shows all exact command and VPNHop HTTP steps for one local approval. Biometric vaults also prompt once to unlock. ' +
           'Does not run any step or return secret values. Use secret names and placeholders for credentials. ' +
           'For each vpn_http step, copy profileHash and secretNames from VPNHop session_profile.',
         inputSchema: SessionInput,
@@ -125,7 +124,7 @@ export function createServer(store: VaultStore, gate?: AccessGate, dialog?: Dial
           .optional()
           .describe(
             'Only when the user explicitly asked to run a shell or interpreter (python3, node, bash …) with ' +
-              'secrets. keyhop shows them a one-time bypass warning plus Touch ID / Windows Hello; nothing is ' +
+              'secrets. keyhop shows them a one-time bypass warning for approval; nothing is ' +
               'remembered. Never set it on your own initiative, and never in place of a normal allowed command.'
           ),
         reason: z
@@ -149,7 +148,7 @@ export function createServer(store: VaultStore, gate?: AccessGate, dialog?: Dial
       title: 'Sync secrets',
       description:
         'Pulls secrets from the linked password tools and sync.d scripts into the vault. The user may see ' +
-        'prompts from their password manager and Touch ID / Windows Hello.',
+        'prompts from their password manager and, for biometric vaults, Touch ID or Windows Hello.',
       inputSchema: {},
     },
     () => respond(() => syncVault(store))

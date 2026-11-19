@@ -140,7 +140,7 @@ export function describeAdd(name: string, pin: ClientPin, replacing: boolean): s
   return [
     `Register "${name}" as a keyhop suite client?`,
     '',
-    `It may read and write secrets starting with ${pin.prefix} (after Touch ID each time), and ask you for others.`,
+    `It may read and write secrets starting with ${pin.prefix} using your vault's configured unlock method, and ask you for others.`,
     '',
     `Client:  ${name}`,
     `Runtime:  "${inert(pin.runtime.realPath, MAX_PATH_CHARS)}"`,
@@ -161,7 +161,7 @@ export function describeGrant(name: string, pin: ClientPin, names: string[], pur
     `Purpose:  "${inert(purpose, MAX_PURPOSE)}"`,
     `Program:  "${inert(pin.entry.realPath, MAX_PATH_CHARS)}"`,
     '',
-    `"Always allow" lets ${name} read these secrets again without this dialog (Touch ID is still needed).`,
+    `"Always allow" lets ${name} read these secrets again using your vault's configured unlock method.`,
   ].join('\n');
 }
 

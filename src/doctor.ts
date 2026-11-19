@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSupportedPlatform, macHelperPath, windowsHelperPath } from './auth.ts';
+import { macHelperPath, readKeyFile, supportsBiometricAuth, windowsHelperPath } from './auth.ts';
 import { claudeRegistration } from './claude.ts';
 import { loadConfig } from './config.ts';
 import type { Paths } from './paths.ts';
-import type { Config } from './types.ts';
+import type { Config, KeyFile } from './types.ts';
 import { availableProviders, isSignedIn, locate, providerFor } from './providers.ts';
 import { interpreterFor, listScripts } from './sync.ts';
 import { compareVersions, latestVersion, resolveRef } from './update.ts';
@@ -33,8 +33,23 @@ export async function runChecks(p: Paths): Promise<Check[]> {
     add('update', 'info', 'could not check GitHub for a newer version');
   }
 
-  if (!isSupportedPlatform()) {
-    add('biometrics', 'fail', `${process.platform} has no supported biometric unlock`, 'Use macOS or Windows');
+  let key: KeyFile | undefined;
+  const hasKey = existsSync(p.key);
+  if (hasKey) {
+    key = await readKeyFile(p.key).catch((error: Error) => {
+      add('vault', 'fail', error.message);
+      return undefined;
+    });
+  }
+  if (key?.auth === 'auto') {
+    if (key.platform !== process.platform)
+      add('authentication', 'fail', `This automatic vault was created on ${key.platform}`);
+    else if (process.platform === 'win32' && !existsSync(windowsHelperPath))
+      add('authentication', 'fail', 'The Windows helper for automatic unlock is missing', 'Rerun the installer');
+    else
+      add('authentication', 'ok', `Automatic unlock via ${process.platform === 'win32' ? 'Windows account protection (DPAPI)' : 'an owner-only key file'}`);
+  } else if (!supportsBiometricAuth()) {
+    add('biometrics', 'info', `${process.platform} supports automatic unlock`, 'keyhop setup --auto-auth');
   } else if (process.platform === 'darwin') {
     if (existsSync(macHelperPath)) add('biometrics', 'ok', 'Touch ID helper built');
     else add('biometrics', 'fail', 'Touch ID helper missing', 'xcode-select --install, then rerun the installer');
@@ -43,8 +58,8 @@ export async function runChecks(p: Paths): Promise<Check[]> {
     else add('biometrics', 'fail', 'Windows Hello helper (keyhop-hello.exe) is missing', 'Rerun the installer');
   }
 
-  if (existsSync(p.key) && existsSync(p.vault)) add('vault', 'ok', 'created');
-  else add('vault', 'fail', 'not created yet', 'keyhop setup');
+  if (key && existsSync(p.vault)) add('vault', 'ok', 'created');
+  else if (!hasKey || key) add('vault', 'fail', 'not created yet', supportsBiometricAuth() ? 'keyhop setup' : 'keyhop setup --auto-auth');
 
   const config: Config = await loadConfig(p).catch((error: Error) => {
     add('config', 'fail', error.message);

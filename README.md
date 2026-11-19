@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/kylepantall/keyhop/actions/workflows/ci.yml/badge.svg)](https://github.com/kylepantall/keyhop/actions/workflows/ci.yml) [![MIT license](https://img.shields.io/badge/license-MIT-716e65)](LICENSE)
 
-Let Claude **use** your API keys without **seeing** them. keyhop syncs secrets from 1Password (and other password tools, or your own scripts) into a local encrypted vault that unlocks with **Touch ID** or **Windows Hello**. Claude runs commands with those secrets as environment variables. It never gets their values back.
+Let Claude **use** your API keys without **seeing** them. keyhop syncs secrets from 1Password (and other password tools, or your own scripts) into a local encrypted vault. Use **Touch ID**, **Windows Hello**, or opt into **automatic unlock** under your local account. Claude runs commands with those secrets as environment variables. It never gets their values back.
 
 ## Install
 
-**macOS** (needs the Xcode command line tools: `xcode-select --install`)
+**macOS and Linux** (macOS needs the Xcode command line tools: `xcode-select --install`)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/install.sh | bash
@@ -20,12 +20,14 @@ curl -fsSL https://raw.githubusercontent.com/kylepantall/keyhop/main/scripts/ins
 
 On Windows this installs the latest [release](https://github.com/kylepantall/keyhop/releases): `keyhop.exe` plus `keyhop-hello.exe` (the Windows Hello helper), checked against the release's `SHA256SUMS`. No PowerShell runs after install. You can also download `keyhop-windows-x64.zip` yourself, unzip it, and run `keyhop.exe setup`.
 
-On a first install the installer starts `keyhop setup`, which:
+On a first install on macOS or Windows the installer starts `keyhop setup`, which:
 
 1. creates the vault (one Touch ID / Hello prompt)
 2. finds the password tools you already have and lets you pick items from them
 3. asks which commands each secret may be given to
 4. runs the first sync and registers keyhop with Claude Code
+
+On Linux, choose automatic unlock after installing.
 
 | Option | macOS / Linux | Windows |
 |---|---|---|
@@ -33,18 +35,41 @@ On a first install the installer starts `keyhop setup`, which:
 | Skip the setup wizard | `--no-setup` | `-NoSetup` |
 | Install a branch, tag or version | `bash -s -- v0.2.0` | `-Version 0.4.0` (releases only) |
 
+### Automatic unlock
+
+For a machine without Touch ID or Windows Hello, create a vault with automatic unlock.
+
+```sh
+keyhop setup --auto-auth
+```
+
+For headless provisioning, create a dedicated vault and link only the credentials that machine needs. For example, with 1Password CLI already signed in:
+
+```sh
+keyhop setup --auto-auth --vault-only
+keyhop add GH_TOKEN 'op://Automation/GitHub/token'
+keyhop sync
+keyhop allow GH_TOKEN gh
+```
+
+The rule authorizes `gh` to receive `GH_TOKEN` as an environment variable. Other credentials and executables have their own rules. You can also provision selected credentials with a `sync.d` script. Keyhop remembers the vault's unlock mode across restarts. To keep an existing biometric vault, set `KEYHOP_HOME` to a separate directory for the automatic vault and use the same directory when starting its MCP server.
+
+Automatic unlock uses an owner-only key file on Linux and macOS. On Windows, DPAPI protects the key under the current Windows account. A process with access to that account and the vault files can unlock the vault. On Linux and macOS, a backup containing both `key.json` and `vault.enc` contains everything needed to decrypt the vault. Keep both files private.
+
+Allowlisted commands can run headlessly. New access grants, script bypasses, suite client registration and plan sessions still require an approval dialog. The dialogs are available on macOS and Windows.
+
 ## Commands
 
 | Command | Does |
 |---|---|
-| `keyhop setup` | Guided setup; rerun it to link more secrets |
+| `keyhop setup [--auto-auth] [--vault-only]` | Create a vault or link more secrets |
 | `keyhop sync` | Pull everything from linked tools and `sync.d` scripts |
 | `keyhop list` | Names, sources and allowed commands (never values) |
 | `keyhop add NAME REF [--allow gh,npm]` | Link one secret |
 | `keyhop allow NAME gh` / `deny NAME gh` | Change which commands get a secret (prompts) |
 | `keyhop run [--bypass] [--reason TEXT] --secrets NAME -- COMMAND …` | Run a command with secrets from your terminal; `--bypass` lets a shell or interpreter through for that one run |
 | `keyhop remove NAME` | Unlink and delete a secret |
-| `keyhop client add NAME --runtime P --entry P --root DIR [--prefix X_]` | Pin a suite client (dialog + Touch ID) |
+| `keyhop client add NAME --runtime P --entry P --root DIR [--prefix X_]` | Pin a suite client after dialog approval |
 | `keyhop client list [--json]` / `client remove NAME` | Show or unpin suite clients |
 | `keyhop client get` / `client put` | For suite clients: JSON on stdin, JSON on stdout |
 | `keyhop doctor` | Check biometrics, vault, tools, scripts and Claude Code |
@@ -97,7 +122,7 @@ Put scripts in the `sync.d` folder (`~/.config/keyhop/sync.d` or `%APPDATA%\keyh
 
 ### One approval for a plan
 
-Ask your MCP agent to use a Keyhop session for a multi-step task. Give it the secret names it should use. For example, “Use a Keyhop plan with `GH_TOKEN` to check `gh auth status` and list open PRs in my repository.” Keyhop shows every command, exact arguments, working folder and secret delivery method in one local dialog. Approve the plan and use Touch ID or Windows Hello once. The agent then runs the steps in order by calling `run_session_step` with the returned session ID and step number.
+Ask your MCP agent to use a Keyhop session for a multi-step task. Give it the secret names it should use. For example, “Use a Keyhop plan with `GH_TOKEN` to check `gh auth status` and list open PRs in my repository.” Keyhop shows every command, exact arguments, working folder and secret delivery method in one local dialog. Approve the plan. Biometric vaults also ask for Touch ID or Windows Hello once. The agent then runs the steps in order by calling `run_session_step` with the returned session ID and step number.
 
 - Each session covers up to eight steps for ten minutes and belongs to one MCP connection. Steps run once. A failed step, finishing the plan, closing the connection, or locking the vault closes the session.
 - Command steps accept environment variables, stdin and `{{file:NAME}}`. Keyhop checks the approved program and credential before use. If you explicitly request an interpreter bypass, the code must be inspectable and appears in the plan.
@@ -124,8 +149,8 @@ If Claude runs a program a secret isn't allowed for, keyhop asks you directly in
 | Button | Then |
 |---|---|
 | Deny | Refused. No request can ask again for 30 s, doubling with each deny (up to 15 min) until you approve one |
-| Allow once | Touch ID / Hello, then this run only; nothing saved |
-| Always allow | Touch ID / Hello, then saved like `keyhop allow` (any arguments, this exact file) |
+| Allow once | Unlock the vault and run this command once |
+| Always allow | Unlock the vault and save the rule like `keyhop allow` (any arguments, this exact file) |
 
 Shells and interpreters are still refused without asking (see below), and only one request can be open at a time. Line breaks and invisible or right-to-left characters in the path, folder or arguments are shown as `\u{…}`, and a program outside system and package-manager folders gets a ⚠️ warning. Turn the dialog off with `"askForAccess": false` in `config.json`.
 
@@ -137,7 +162,7 @@ Shells and interpreters (`python3`, `node`, `bash` …) can never be allowed, be
 keyhop run --bypass --secrets OPENAI_API_KEY -- python3 scripts/embed.py
 ```
 
-Or ask Claude to; it calls `run_with_secrets` with `bypassGuard: true`. Either way keyhop shows a ⚠️ **one-time bypass** dialog and then Touch ID / Windows Hello. The dialog says who is asking ("Claude Code would like to run a script. It will have access to your secrets."), why, in the caller's own words (`reason`, or `--reason` from the terminal), the real program, its arguments and folder, and two sections you can open:
+Or ask Claude to; it calls `run_with_secrets` with `bypassGuard: true`. Either way keyhop shows a ⚠️ **one-time bypass** dialog and uses the vault's configured unlock method. The dialog says who is asking ("Claude Code would like to run a script. It will have access to your secrets."), why, in the caller's own words (`reason`, or `--reason` from the terminal), the real program, its arguments and folder, and two sections you can open:
 
 - **Secrets requested**: each name (never a value) and how it is handed over.
 - **View script**: the code it will run, syntax highlighted with line numbers. Inline code (`python3 -c`, `node -e`, `bash -c`, `pwsh -Command` …) is shown as given. A script file is read once, and a private read-only copy of exactly what you saw is what runs (next to the original, so relative imports still work; deleted afterwards), so editing the file after the dialog changes nothing. Invisible or right-to-left characters are shown as red-flagged `\u{…}` escapes, and long lines wrap so nothing hides past the edge. When keyhop can't be sure which code runs (`python3 -m`, `node -r preload.js`, an unknown interpreter), it says so instead of guessing. The script can still load other files.
@@ -152,8 +177,8 @@ Apps in the hop suite (vpnhop, hopsql) keep their own secrets in keyhop. Each is
 |---|---|
 | Pinned | Runtime real path + SHA-256, entry real path (inside the root), root tree hash: SHA-256 over sorted `relpath NUL sha256 NUL`, `node_modules` included. No symlinks; no world-writable root |
 | Verified per call, before any prompt | Parent's executable (`lsof`), argv exactly `<runtime> <entry> …` (kernel argv, no flags first), no `NODE_*`/`BUN_*` variables except `NODE_ENV`, `NODE_NO_WARNINGS`, `NODE_DISABLE_COLORS`, no `DYLD_*`/`LD_*`, readable environment, working folder inside the root (client launchers `cd` there), tree unchanged. Bun runtimes: no `bunfig.toml` in home |
-| Own names | Names starting with the prefix (`VPNHOP_`): read after Touch ID, written after Touch ID |
-| Other names | Dialog with the client, names and purpose, then Touch ID. "Always allow" is saved per client and bound to the secret's source |
+| Own names | Names starting with the prefix (`VPNHOP_`): read and written using the configured unlock method |
+| Other names | Dialog with the client, names and purpose, followed by the configured unlock. "Always allow" is saved per client and bound to the secret's source |
 | Sync | Entries written by clients (source `client:NAME`) survive `keyhop sync` |
 | Exit codes | 0 ok · 1 error · 2 `cancelled` · 3 not a verified client · 4 `denied` · 5 unknown names |
 
@@ -163,9 +188,9 @@ Updating a client changes its tree hash, so its installer reruns `keyhop client 
 
 | Guard | Detail |
 |---|---|
-| Hardware-bound key | macOS: a Secure Enclave key, used only after Touch ID. Windows: a Windows Hello key signs a challenge. Copying the files to another machine gets nothing. |
+| Vault key | Biometric vaults use Secure Enclave on macOS or Windows Hello on Windows. Automatic vaults use local account protection as described above. |
 | Encrypted vault | AES-256-GCM. The access rules live inside it, so editing a config file can't widen them. |
-| Per-secret allowlist | A secret is only injected into executables you allowed, ahead of time or in the access dialog (which always needs a fresh Touch ID / Hello). Each is pinned by real path and SHA-256, so a swapped binary or symlink is refused (re-allow after upgrading a tool). Shells and interpreters (`bash`, `node`, `python3.12`, `env`…) are refused. |
+| Per-secret allowlist | A secret is only injected into executables you allowed, ahead of time or in the access dialog. Biometric vaults require a fresh Touch ID or Windows Hello confirmation when you grant access in a dialog. Each executable is pinned by real path and SHA-256, so a swapped binary or symlink is refused (re-allow after upgrading a tool). Shells and interpreters (`bash`, `node`, `python3.12`, `env`…) are refused. |
 | Bound to its source | Rules are tied to the exact ref or script content that filled the name. Editing `config.json` or a `sync.d` script, or overriding the name from another step, clears them. |
 | No shell | `run_with_secrets` runs the program directly, so `$TOKEN` in an argument is never expanded. |
 | Redaction | Values, plus their base64, hex and URL-encoded forms, are scrubbed from output. |
@@ -194,4 +219,4 @@ bun install && bun run build:helper && bun test && bun run typecheck
 
 End-to-end runs without Touch ID: `NODE_ENV=test KEYHOP_TEST_AUTH=1 KEYHOP_HOME=<temp dir>` swaps in a test authenticator and auto-answers dialogs with `KEYHOP_TEST_DIALOG` (`once`, `always`, `deny`). It works only in a git checkout (installs have no `.git`), refuses the default data folder, and only opens vaults it created, so it can't unlock a real one.
 
-Data lives in `~/.config/keyhop` (macOS) or `%APPDATA%\keyhop`; override with `KEYHOP_HOME`. MIT licensed.
+Data lives in `~/.config/keyhop` on Linux and macOS or `%APPDATA%\keyhop` on Windows. Override with `KEYHOP_HOME`. MIT licensed.

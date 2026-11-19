@@ -64,6 +64,6 @@ export function paths(dir = dataDir()): Paths {
 export async function writePrivate(file: string, contents: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  await writeFile(temp, contents, { mode: 0o600 });
+  await writeFile(temp, contents, { mode: 0o600, flag: 'wx' });
   await rename(temp, file);
 }
