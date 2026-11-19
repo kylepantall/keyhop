@@ -106,7 +106,7 @@ export async function pinClient(options: { runtime?: string; entry?: string; roo
   }
 }
 
-function samePin(a: ClientPin, b: ClientPin): boolean {
+export function samePin(a: ClientPin, b: ClientPin): boolean {
   const key = (p: ClientPin) => JSON.stringify([p.runtime, p.entry, p.root, p.prefix]);
   return key(a) === key(b);
 }

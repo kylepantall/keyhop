@@ -40,7 +40,8 @@ export type Approver<R = AccessRequest> = (request: R) => Promise<Decision>;
  * `prompt`, the helper shows that richer layout instead (sections the user
  * can expand, and the script); `message` is the plain-text fallback.
  */
-export type Dialog = (message: string, kind: 'grant' | 'confirm' | 'bypass', prompt?: Prompt) => Promise<Decision>;
+type DialogKind = 'grant' | 'confirm' | 'bypass' | 'plan';
+export type Dialog = (message: string, kind: DialogKind, prompt?: Prompt) => Promise<Decision>;
 
 /** What the rich dialog shows. Every string in it is fixed wording or already inert. */
 export interface Prompt {
@@ -52,6 +53,8 @@ export interface Prompt {
   warnings: string[];
   secrets: [name: string, how: string][];
   script?: { label: string; tokens: Token[] };
+  /** The complete, already escaped review text for the native plan dialog. */
+  plan?: string;
   /** Shown in place of the script when keyhop can't tell what code runs. */
   noScript?: string;
   footer: string;
@@ -80,6 +83,8 @@ const KNOWN_CLIENTS: Record<string, string> = {
   'claude-desktop': 'Claude',
   'Claude Desktop': 'Claude',
   'claude-cowork': 'Claude',
+  'codex-mcp-client': 'Codex',
+  codex: 'Codex',
 };
 
 /**
@@ -89,13 +94,17 @@ const KNOWN_CLIENTS: Record<string, string> = {
  */
 export function clientLabel(name: string | undefined): string {
   if (name === undefined) return 'A command in your terminal';
-  if (KNOWN_CLIENTS[name]) return KNOWN_CLIENTS[name]!;
+  if (Object.hasOwn(KNOWN_CLIENTS, name)) return KNOWN_CLIENTS[name]!;
   if (/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,39}$/.test(name)) return `An app calling itself "${name}"`;
   return 'An MCP client';
 }
 
 /** Where package managers and the OS put programs; anything else gets a warning. */
 const USUAL_PLACES = /^(\/usr\/|\/bin\/|\/sbin\/|\/opt\/homebrew\/|\/Applications\/|[A-Za-z]:\\(Program Files|Program Files \(x86\)|Windows)\\)/i;
+
+export function isSystemExecutable(path: string): boolean {
+  return USUAL_PLACES.test(path);
+}
 
 /**
  * Shows text the model chose (paths, folder, arguments) inert: line breaks,
@@ -137,7 +146,7 @@ function wording(request: AccessRequest) {
     : 'Check the program and what it will be given before you allow it.';
   const reason = request.reason?.trim() ? inert(request.reason.trim(), MAX_REASON_CHARS) : undefined;
   const warnings: string[] = [];
-  if (!USUAL_PLACES.test(request.executable))
+  if (!isSystemExecutable(request.executable))
     warnings.push('This program is not in a system or package-manager folder. Claude may have created it.');
   if (script) warnings.push(...scriptWarnings(script.code));
   const noScript =
@@ -225,6 +234,7 @@ export function encodePrompt(prompt: Prompt): string {
   for (const warning of prompt.warnings) lines.push(['warning', b64(warning)]);
   for (const [name, how] of prompt.secrets) lines.push(['secret', b64(name), b64(how)]);
   if (prompt.noScript) lines.push(['noscript', b64(prompt.noScript)]);
+  if (prompt.plan) lines.push(['token', 'plain', b64(prompt.plan)]);
   if (prompt.script) {
     lines.push(['scriptlabel', b64(prompt.script.label)]);
     for (const [kind, text] of prompt.script.tokens) lines.push(['token', kind, b64(text)]);
@@ -250,7 +260,7 @@ const MAC_SCRIPTS = {
 
 const MAC_ANSWERS: Record<string, Decision> = { 'Allow once': 'once', 'Always allow': 'always', Allow: 'once' };
 
-function answerOf(kind: 'grant' | 'confirm' | 'bypass', answer: Decision): Decision {
+function answerOf(kind: DialogKind, answer: Decision): Decision {
   return kind === 'grant' || answer === 'deny' ? answer : 'once';
 }
 
@@ -267,6 +277,7 @@ export function platformDialog(): Dialog | null {
       return answerOf(kind, (result.code === 0 && MAC_ANSWERS[result.stdout.trim()]) || 'deny');
     };
     return async (message, kind, prompt) => {
+      if (kind === 'plan') return askPlan(macHelperPath, prompt);
       if (!prompt || !existsSync(macHelperPath)) return osascript(message, kind);
       const result = await runProcess(macHelperPath, ['ask'], { input: encodePrompt(prompt), timeoutMs: PROMPT_ANSWER_MS });
       // A helper built before `ask` existed: fall back to the plain dialog.
@@ -278,6 +289,7 @@ export function platformDialog(): Dialog | null {
   }
   if (process.platform === 'win32')
     return async (message, kind, prompt) => {
+      if (kind === 'plan') return askPlan(windowsHelperPath, prompt);
       // Older helpers ignore --once and show all three buttons; the answer is still read as once.
       // They also ignore --prompt and show KEYHOP_ASK_MESSAGE as before.
       const args = ['ask', ...(kind === 'grant' ? [] : ['--once']), ...(prompt ? ['--prompt'] : [])];
@@ -291,6 +303,13 @@ export function platformDialog(): Dialog | null {
       return answerOf(kind, answer);
     };
   return null;
+}
+
+async function askPlan(helper: string, prompt?: Prompt): Promise<Decision> {
+  if (!prompt) return 'deny';
+  // An older helper cannot display a plan. Never fall back to a partial prompt.
+  const result = await runProcess(helper, ['ask-plan'], { input: encodePrompt(prompt), timeoutMs: PROMPT_ANSWER_MS });
+  return result.code === 0 && result.stdout.trim() === 'once' ? 'once' : 'deny';
 }
 
 /** Shows an access request in `dialog`: the rich layout where the helper has one, text otherwise. */
@@ -327,11 +346,15 @@ export class AccessGate<R = AccessRequest> {
    * approval. A cancelled confirm counts as a deny.
    */
   async ask(request: R, confirm: () => Promise<void>): Promise<Decision | 'busy' | 'cooling'> {
+    return this.askDialog(() => this.approver(request), confirm);
+  }
+
+  async askDialog(approve: () => Promise<Decision>, confirm: () => Promise<void>): Promise<Decision | 'busy' | 'cooling'> {
     if (this.now() < this.blockedUntil) return 'cooling';
     if (this.pending) return 'busy';
     this.pending = true;
     try {
-      const decision = await this.approver(request).catch((): Decision => 'deny');
+      const decision = await approve().catch((): Decision => 'deny');
       if (decision !== 'deny') {
         try {
           await confirm();

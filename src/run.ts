@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { AccessGate } from './approve.ts';
 import { openWindowsPipe, type SecretPipe } from './pipes.ts';
@@ -8,7 +8,7 @@ import { redactor } from './redact.ts';
 import { findScript, snapshotScript, type Script } from './script.ts';
 import type { VaultStore } from './store.ts';
 import { changeAllowed, syncedSecrets } from './secrets.ts';
-import { allowedModes, type Delivery, type VaultData } from './types.ts';
+import { allowedModes, type AllowedExecutable, type Delivery, type VaultData } from './types.ts';
 
 export interface RunOptions {
   /** Asks the user about secrets not allowed for the program; without it they are refused. */
@@ -71,6 +71,16 @@ function boundPolicy(vault: VaultData, name: string) {
   return policy?.boundTo === vault.secrets[name]!.origin ? policy : undefined;
 }
 
+export function workingDirectory(cwd = process.env.KEYHOP_CWD ?? process.cwd()): string {
+  if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory())
+    throw new Error(`cwd must be an existing absolute directory: ${cwd}`);
+  return cwd;
+}
+
+export function realDirectory(cwd?: string): string {
+  return realpathSync(workingDirectory(cwd));
+}
+
 export async function runWithSecrets(store: VaultStore, request: RunRequest, options: RunOptions = {}): Promise<RunResult> {
   const uses = deliveries(request);
   if (!uses.size) throw new Error('Name at least one secret: in secrets, stdin, or an argument as {{file:NAME}} / {{arg:NAME}}.');
@@ -92,9 +102,7 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
   }
   // The launcher starts keyhop in its own folder (so Bun never loads a planted
   // bunfig.toml or .env) and passes the folder it was started from.
-  const cwd = request.cwd ?? process.env.KEYHOP_CWD ?? process.cwd();
-  if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory())
-    throw new Error(`cwd must be an existing absolute directory: ${cwd}`);
+  const cwd = workingDirectory(request.cwd);
 
   const vault = await store.read();
   const missing = names.filter((name) => !vault.secrets[name]);
@@ -109,9 +117,8 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
     const snapshot = script ? await snapshotScript(script, request.args) : undefined;
     try {
       return await execute(
-        store,
+        () => store.read(),
         request,
-        path,
         cwd,
         uses,
         names,
@@ -174,12 +181,38 @@ export async function runWithSecrets(store: VaultStore, request: RunRequest, opt
       );
     for (const grant of grants) grant.allowed ??= pinned;
   }
-  return execute(store, request, path, cwd, uses, names, async () => {
+  return execute(() => store.read(), request, cwd, uses, names, async () => {
     // Same file as when allowed; run the verified real path so a symlink swap can't redirect it.
     let executable = path;
     for (const grant of grants) executable = await verifyPinned(path, grant.allowed!, grant.name);
     return executable;
   });
+}
+
+/** Executes only the command, folder and script pinned and displayed by an approved session. */
+export async function runApprovedCommand(
+  readVault: () => Promise<VaultData>,
+  request: RunRequest,
+  program: AllowedExecutable,
+  cwd: string,
+  script: Script | null,
+  signal: AbortSignal
+): Promise<RunResult> {
+  const uses = deliveries(request);
+  const snapshot = script ? await snapshotScript(script, request.args) : undefined;
+  try {
+    return await execute(
+      readVault, request, cwd, uses, [...uses.keys()],
+      async () => {
+        await snapshot?.verify();
+        if (realDirectory(cwd) !== cwd) throw new Error('The approved working directory changed.');
+        return verifyPinned(program.path, program, 'the approved plan', { bypass: !!script });
+      },
+      snapshot?.args, signal
+    );
+  } finally {
+    await snapshot?.remove();
+  }
 }
 
 /**
@@ -226,17 +259,18 @@ async function bypassOnce(
 }
 
 async function execute(
-  store: VaultStore,
+  readVault: () => Promise<VaultData>,
   request: RunRequest,
-  path: string,
   cwd: string,
   uses: Map<string, Set<Delivery>>,
   names: string[],
   verify: () => Promise<string>,
-  runArgs: string[] = request.args
+  runArgs: string[] = request.args,
+  signal?: AbortSignal
 ): Promise<RunResult> {
+  signal?.throwIfAborted();
   const executable = await verify();
-  const vault = await store.read();
+  const vault = await readVault();
   const all = syncedSecrets(vault);
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.keys(all)) delete env[name];
@@ -264,6 +298,7 @@ async function execute(
       env,
       timeoutMs: timeoutSeconds * 1000,
       killTree: true,
+      signal,
       input: request.stdin ? all[request.stdin] : undefined,
       extraInputs: process.platform === 'win32' ? undefined : fileNames.map((name) => all[name]!),
       onSpawn: (pid) => pipes.forEach((pipe) => pipe.attach(pid)),

@@ -30,6 +30,7 @@ export interface ProcessOptions {
   extraInputs?: string[];
   /** Called with the child's pid right after it starts. */
   onSpawn?: (pid: number) => void;
+  signal?: AbortSignal;
 }
 
 /** After exit, how long to wait for descendants still holding the pipes. */
@@ -49,6 +50,7 @@ function killGroup(child: ChildProcess): void {
 export function runProcess(command: string, args: string[], options: ProcessOptions = {}): Promise<ProcessResult> {
   const maxBytes = options.maxBytes ?? 1024 * 1024;
   return new Promise((resolve, reject) => {
+    options.signal?.throwIfAborted();
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -62,6 +64,11 @@ export function runProcess(command: string, args: string[], options: ProcessOpti
         ...(options.extraInputs ?? []).map(() => 'pipe' as const),
       ],
     });
+    const kill = () => {
+      if (options.killTree) killGroup(child);
+      else child.kill('SIGKILL');
+    };
+    options.signal?.addEventListener('abort', kill, { once: true });
     if (child.pid) options.onSpawn?.(child.pid);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -88,6 +95,7 @@ export function runProcess(command: string, args: string[], options: ProcessOpti
       settled = true;
       clearTimeout(timer);
       clearTimeout(drain);
+      options.signal?.removeEventListener('abort', kill);
       child.stdout!.destroy();
       child.stderr!.destroy();
       resolve({
@@ -102,12 +110,12 @@ export function runProcess(command: string, args: string[], options: ProcessOpti
     const timer = options.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          if (options.killTree) killGroup(child);
-          else child.kill('SIGKILL');
+          kill();
         }, options.timeoutMs)
       : undefined;
     child.on('error', (error) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', kill);
       settled = true;
       reject(error);
     });

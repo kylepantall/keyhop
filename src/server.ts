@@ -1,13 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { AccessGate, clientLabel, platformApprover } from './approve.ts';
+import { AccessGate, approverFor, clientLabel, platformDialog, type Dialog } from './approve.ts';
 import { loadConfig, unlockMs } from './config.ts';
 import { platformAuthenticator } from './auth.ts';
 import { paths } from './paths.ts';
 import { runWithSecrets } from './run.ts';
 import { summarize, syncVault } from './secrets.ts';
+import { PlanSession, SessionInput } from './session.ts';
 import { VaultStore } from './store.ts';
+import { testDialog, testSeamEnabled } from './testauth.ts';
 import { VERSION } from './version.ts';
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
@@ -20,7 +22,8 @@ async function respond(work: () => Promise<unknown>): Promise<ToolResult> {
   }
 }
 
-export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
+export function createServer(store: VaultStore, gate?: AccessGate, dialog?: Dialog): McpServer {
+  const session = gate && dialog ? new PlanSession(store, gate, dialog) : undefined;
   const server = new McpServer(
     { name: 'keyhop', version: VERSION },
     {
@@ -30,9 +33,54 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
         'secrets as environment variables, on stdin, or as a {{file:NAME}} path. Output is redacted. Unlocking prompts the user for Touch ID or ' +
         'Windows Hello. Only the user can change which commands a secret may be used with: if a secret is ' +
         'not allowed for a program, keyhop may ask the user directly (a dialog plus Touch ID / Windows ' +
-        'Hello) and the call waits for their answer. Do not retry a denied request.',
+        'Hello) and the call waits for their answer. Do not retry a denied request.' +
+        (session
+          ? ' For a multi-step task, use open_session before any step is run. It shows the user the entire plan for one ' +
+            'approval and biometric check. Then use run_session_step in order. Use VPNHop session_profile to prepare ' +
+            'any vpn_http steps. Keep the session ID in this connection and close the session if the plan changes.'
+          : ''),
     }
   );
+
+  if (session) {
+    server.server.onclose = () => { session.revoke(); };
+    server.registerTool(
+      'open_session',
+      {
+        title: 'Approve a Keyhop plan',
+        description:
+          'Shows all exact command and VPNHop HTTP steps for one local approval and biometric check. ' +
+          'Does not run any step or return secret values. Use secret names and placeholders for credentials. ' +
+          'For each vpn_http step, copy profileHash and secretNames from VPNHop session_profile.',
+        inputSchema: SessionInput,
+        annotations: { openWorldHint: false, destructiveHint: false },
+      },
+      (input, { signal }) =>
+        respond(() => session.open(input, clientLabel(server.server.getClientVersion()?.name ?? ''), signal))
+    );
+    server.registerTool(
+      'run_session_step',
+      {
+        title: 'Run the next approved step',
+        description:
+          'Runs one approved step exactly as shown. Use nextStep returned by open_session or the previous ' +
+          'run_session_step. A step runs at most once. The session closes on failure or after the last step.',
+        inputSchema: { sessionId: z.uuid(), step: z.number().int().positive() },
+        annotations: { openWorldHint: true, destructiveHint: true },
+      },
+      ({ sessionId, step }, { signal }) => respond(() => session.run(sessionId, step, signal))
+    );
+    server.registerTool(
+      'close_session',
+      {
+        title: 'Close a Keyhop plan session',
+        description: 'Revokes remaining steps in this plan and cancels any running step.',
+        inputSchema: { sessionId: z.uuid() },
+        annotations: { openWorldHint: false, destructiveHint: false, idempotentHint: true },
+      },
+      ({ sessionId }) => respond(async () => ({ closed: session.revoke(sessionId) }))
+    );
+  }
 
   server.registerTool(
     'list_secrets',
@@ -111,11 +159,12 @@ export function createServer(store: VaultStore, gate?: AccessGate): McpServer {
     'lock_vault',
     {
       title: 'Lock vault',
-      description: 'Forgets the unlocked vault key; the next use prompts the user again.',
+      description: 'Forgets the unlocked vault key and closes any plan session on this connection.',
       inputSchema: {},
     },
     () =>
       respond(async () => {
+        session?.revoke();
         store.lock();
         return { locked: true };
       })
@@ -128,6 +177,7 @@ export async function serve(): Promise<void> {
   const p = paths();
   const config = await loadConfig(p);
   const store = new VaultStore(p, platformAuthenticator(), unlockMs(config));
-  const approver = config.askForAccess === false ? null : platformApprover();
-  await createServer(store, approver ? new AccessGate(approver) : undefined).connect(new StdioServerTransport());
+  const dialog = config.askForAccess === false ? null : testSeamEnabled() ? testDialog() : platformDialog();
+  await createServer(store, dialog ? new AccessGate(approverFor(dialog)) : undefined, dialog ?? undefined)
+    .connect(new StdioServerTransport());
 }

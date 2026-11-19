@@ -164,7 +164,7 @@ final class AskController: NSObject, NSWindowDelegate {
   private var allowButtons: [NSButton] = []
   private let width: CGFloat = 620
 
-  init(_ prompt: Prompt) {
+  init(_ prompt: Prompt, plan: Bool) {
     panel = AskPanel(
       contentRect: NSRect(x: 0, y: 0, width: 660, height: 300),
       styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -195,31 +195,35 @@ final class AskController: NSObject, NSWindowDelegate {
     }
     stack.addArrangedSubview(details)
 
-    let secrets = NSStackView()
-    secrets.orientation = .vertical
-    secrets.alignment = .leading
-    secrets.spacing = 3
-    for (name, how) in prompt.secrets {
-      let line = NSMutableAttributedString(
-        string: "•  \(name)", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
-      line.append(NSAttributedString(
-        string: "   \(how)", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
-      let field = label("")
-      field.attributedStringValue = line
-      secrets.addArrangedSubview(field)
-    }
-    section("Secrets requested (\(prompt.secrets.count))", content: secrets)
+    if plan {
+      stack.addArrangedSubview(scriptView(prompt.tokens, height: 260))
+    } else {
+      let secrets = NSStackView()
+      secrets.orientation = .vertical
+      secrets.alignment = .leading
+      secrets.spacing = 3
+      for (name, how) in prompt.secrets {
+        let line = NSMutableAttributedString(
+          string: "•  \(name)", attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
+        line.append(NSAttributedString(
+          string: "   \(how)", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]))
+        let field = label("")
+        field.attributedStringValue = line
+        secrets.addArrangedSubview(field)
+      }
+      section("Secrets requested (\(prompt.secrets.count))", content: secrets)
 
-    if let scriptLabel = prompt.scriptLabel {
-      let box = NSStackView()
-      box.orientation = .vertical
-      box.alignment = .leading
-      box.spacing = 6
-      box.addArrangedSubview(label(scriptLabel, font: .systemFont(ofSize: 12), color: .secondaryLabelColor))
-      box.addArrangedSubview(scriptView(prompt.tokens))
-      section("View script", content: box)
-    } else if let noScript = prompt.noScript {
-      stack.addArrangedSubview(label("⚠️  " + noScript))
+      if let scriptLabel = prompt.scriptLabel {
+        let box = NSStackView()
+        box.orientation = .vertical
+        box.alignment = .leading
+        box.spacing = 6
+        box.addArrangedSubview(label(scriptLabel, font: .systemFont(ofSize: 12), color: .secondaryLabelColor))
+        box.addArrangedSubview(scriptView(prompt.tokens))
+        section("View script", content: box)
+      } else if let noScript = prompt.noScript {
+        stack.addArrangedSubview(label("⚠️  " + noScript))
+      }
     }
 
     for warning in prompt.warnings { stack.addArrangedSubview(label("⚠️  " + warning)) }
@@ -275,8 +279,7 @@ final class AskController: NSObject, NSWindowDelegate {
     return field
   }
 
-  private func scriptView(_ tokens: [(String, String)]) -> NSView {
-    let height: CGFloat = 340
+  private func scriptView(_ tokens: [(String, String)], height: CGFloat = 340) -> NSView {
     let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: width, height: height))
     scroll.hasVerticalScroller = true
     scroll.autohidesScrollers = false
@@ -351,11 +354,12 @@ final class AskController: NSObject, NSWindowDelegate {
 }
 
 /// Deny is the default and the cancel action; closing, Escape or 3 minutes without an answer denies.
-func ask(_ prompt: Prompt) -> String {
+func ask(_ prompt: Prompt, plan: Bool = false) -> String {
+  if plan && (prompt.tokens.isEmpty || prompt.buttons != "once") { return "deny" }
   let app = NSApplication.shared
   app.setActivationPolicy(.accessory)
   app.finishLaunching()
-  let controller = AskController(prompt)
+  let controller = AskController(prompt, plan: plan)
   let enable = Timer(timeInterval: 1.0, repeats: false) { _ in controller.enableAllow() }
   let giveUp = Timer(timeInterval: 180, repeats: false) { _ in controller.finish("deny") }
   RunLoop.main.add(enable, forMode: .common)
@@ -421,6 +425,9 @@ case "derive":
 
 case "ask":
   print(ask(readPrompt()))
+
+case "ask-plan":
+  print(ask(readPrompt(), plan: true))
 
 default:
   fail("Unknown command: \(command)")
